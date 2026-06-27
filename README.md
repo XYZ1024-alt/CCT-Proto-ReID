@@ -10,6 +10,7 @@ The current implementation follows `docs/2026-06-27-t2c-clip-design.md` for the 
 - Training-time Feature Centralization (TFC) EMA centers and loss.
 - Bidirectional image-text contrastive loss and batch-hard triplet loss.
 - Stage-1 prompt alignment loss and Stage-2 CLIP/ReID/TFC loss breakdown.
+- MLflow tracking with a SQLite backend store.
 - No-rerank cosine ReID evaluation.
 - Injectable dual-stream model wiring for real CLIP image/text encoders.
 - `.npz` no-rerank evaluation CLI.
@@ -40,6 +41,22 @@ wsl --cd /mnt/d/Code/T2C-CLIP /home/xyz10/miniconda3/bin/conda run -n reid pytho
 ```
 
 The evaluator performs standard Image-to-Image ReID scoring without rerank. Same-identity same-camera gallery samples are excluded for each query.
+
+## MLflow SQLite Tracking
+
+Initialize the local SQLite-backed MLflow store:
+
+```bash
+wsl --cd /mnt/d/Code/T2C-CLIP /home/xyz10/miniconda3/bin/conda run -n reid python -m t2c_clip.cli.mlflow --tracking-db mlflow/t2c_clip.db --artifact-root mlruns --experiment-name T2C-CLIP
+```
+
+Start the MLflow UI on port 6006:
+
+```bash
+wsl --cd /mnt/d/Code/T2C-CLIP /home/xyz10/miniconda3/bin/conda run -n reid mlflow ui --backend-store-uri sqlite:///mlflow/t2c_clip.db --default-artifact-root mlruns --host 127.0.0.1 --port 6006
+```
+
+The SQLite database and artifact directory are local runtime outputs and are ignored by git.
 
 ## CLIP Encoder Boundary
 

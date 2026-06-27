@@ -11,3 +11,6 @@ Market-1501/
 checkpoints/
 runs/
 outputs/
+mlflow/*.db
+mlflow/*.db-*
+mlruns/
