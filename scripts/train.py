@@ -96,11 +96,22 @@ def main(argv: Sequence[str] | None = None, progress_factory: ProgressFactory | 
     args = _build_parser().parse_args(argv)
     with _mlflow_context_if_requested(args):
         job = _load_job_builder(args.job_builder)(args)
-        if isinstance(job, TwoStageTrainingJob):
+        # Use a structural check rather than ``isinstance(job, TwoStageTrainingJob)``.
+        # Under ``python -m scripts.train`` the entry module is loaded twice (once
+        # as ``__main__`` and once as ``scripts.train``), so the ``TwoStageTrainingJob``
+        # class object seen here (from ``__main__``) differs from the one the job
+        # builder imported (from ``scripts.train``). isinstance would always be
+        # False and the two-stage job would be wrongly dispatched to the single
+        # loop. Duck-typing on the public stage attributes sidesteps that.
+        if _is_two_stage_job(job):
             _run_two_stage_loop(job, args, progress_factory)
         else:
             _run_single_loop(job, args, progress_factory)
     return 0
+
+
+def _is_two_stage_job(job: Any) -> bool:
+    return hasattr(job, "stage1") and hasattr(job, "stage2") and not hasattr(job, "model")
 
 
 def _build_parser() -> argparse.ArgumentParser:
