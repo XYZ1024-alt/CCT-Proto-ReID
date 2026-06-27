@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -17,11 +17,14 @@ DEFAULT_CHECKPOINT_DIR = Path("checkpoints")
 BEST_CHECKPOINT_NAME = "best.pth"
 LAST_CHECKPOINT_NAME = "last.pth"
 DEFAULT_PROGRESS_DESCRIPTION = "training"
+VALIDATION_MESSAGE_KEYS = ("mAP", "rank1", "best_mAP")
 
-TrainOneEpoch = Callable[[int], Any]
+TrainMetrics = Mapping[str, float]
+TrainOneEpoch = Callable[[int], TrainMetrics | None]
 ValidateEpoch = Callable[[int], ReIDMetrics]
 ProgressFactory = Callable[[Iterable[int]], Iterable[int]]
 MetricLogger = Callable[[int, ReIDMetrics, float | None, bool], None]
+TrainMetricLogger = Callable[[int, TrainMetrics], None]
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,7 @@ class EpochResult:
     metrics: ReIDMetrics | None
     best_map: float | None
     is_best: bool
+    train_metrics: TrainMetrics = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -60,19 +64,22 @@ def run_training_loop(
     validate: ValidateEpoch,
     progress_factory: ProgressFactory = tqdm,
     metric_logger: MetricLogger | None = None,
+    train_metric_logger: TrainMetricLogger | None = None,
 ) -> TrainingLoopResult:
     config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
     best_map: float | None = None
     history: list[EpochResult] = []
     progress = _progress_epochs(config, progress_factory)
     for epoch in progress:
-        train_one_epoch(epoch)
+        train_metrics = _train_metrics(train_one_epoch(epoch))
+        _report_training_progress(progress, train_metrics)
+        _log_train_metrics(epoch, train_metrics, train_metric_logger)
         metrics = validate(epoch) if should_validate_epoch(epoch, config.validation_interval) else None
         is_best = _is_best_metric(metrics, best_map)
         best_map = metrics.map if is_best and metrics is not None else best_map
-        _report_metrics(progress, epoch, metrics, best_map, is_best, metric_logger)
+        _report_metrics(progress, epoch, train_metrics, metrics, best_map, is_best, metric_logger)
         _save_epoch_checkpoints(model, optimizer, config, epoch, metrics, best_map, is_best)
-        history.append(EpochResult(epoch, metrics, best_map, is_best))
+        history.append(EpochResult(epoch, metrics, best_map, is_best, train_metrics))
     return TrainingLoopResult(best_map=best_map, history=tuple(history))
 
 
@@ -97,37 +104,91 @@ def _is_best_metric(metrics: ReIDMetrics | None, best_map: float | None) -> bool
 def _report_metrics(
     progress: Iterable[int],
     epoch: int,
+    train_metrics: TrainMetrics,
     metrics: ReIDMetrics | None,
     best_map: float | None,
     is_best: bool,
     metric_logger: MetricLogger | None,
 ) -> None:
     if metrics is None:
-        _write_progress_message(progress, f"epoch={epoch} done")
+        _write_epoch_progress_message(progress, epoch, train_metrics, None, best_map, is_best)
         return
-    _write_progress_metrics(progress, epoch, metrics, best_map, is_best)
+    _write_epoch_progress_metrics(progress, epoch, train_metrics, metrics, best_map, is_best)
     if metric_logger is not None:
         metric_logger(epoch, metrics, best_map, is_best)
 
 
-def _write_progress_metrics(
+def _report_training_progress(progress: Iterable[int], train_metrics: TrainMetrics) -> None:
+    if train_metrics:
+        _write_progress_values(progress, _train_metric_strings(train_metrics))
+
+
+def _log_train_metrics(
+    epoch: int,
+    train_metrics: TrainMetrics,
+    train_metric_logger: TrainMetricLogger | None,
+) -> None:
+    if train_metrics and train_metric_logger is not None:
+        train_metric_logger(epoch, train_metrics)
+
+
+def _write_epoch_progress_metrics(
     progress: Iterable[int],
     epoch: int,
+    train_metrics: TrainMetrics,
     metrics: ReIDMetrics,
     best_map: float | None,
     is_best: bool,
 ) -> None:
-    values = _metric_strings(metrics, best_map)
+    values = _epoch_metric_strings(train_metrics, metrics, best_map)
+    _write_progress_values(progress, values)
+    _write_progress_message(progress, _epoch_progress_message(epoch, values, is_best))
+
+
+def _write_epoch_progress_message(
+    progress: Iterable[int],
+    epoch: int,
+    train_metrics: TrainMetrics,
+    metrics: ReIDMetrics | None,
+    best_map: float | None,
+    is_best: bool,
+) -> None:
+    values = _epoch_metric_strings(train_metrics, metrics, best_map)
+    message = _epoch_progress_message(epoch, values, is_best) if values else f"epoch={epoch} done"
+    _write_progress_message(progress, message)
+
+
+def _write_progress_values(progress: Iterable[int], values: Mapping[str, str]) -> None:
     set_postfix = getattr(progress, "set_postfix", None)
     if callable(set_postfix):
         set_postfix(values)
-    _write_progress_message(progress, f"epoch={epoch} {_metric_message(values)} best={is_best}")
 
 
 def _write_progress_message(progress: Iterable[int], message: str) -> None:
     write = getattr(progress, "write", None)
     if callable(write):
         write(message)
+
+
+def _train_metrics(result: TrainMetrics | None) -> TrainMetrics:
+    if result is None:
+        return {}
+    return {name: float(value) for name, value in result.items()}
+
+
+def _epoch_metric_strings(
+    train_metrics: TrainMetrics,
+    metrics: ReIDMetrics | None,
+    best_map: float | None,
+) -> dict[str, str]:
+    values = _train_metric_strings(train_metrics)
+    if metrics is not None:
+        values.update(_metric_strings(metrics, best_map))
+    return values
+
+
+def _train_metric_strings(train_metrics: TrainMetrics) -> dict[str, str]:
+    return {name: _format_metric(value) for name, value in train_metrics.items()}
 
 
 def _metric_strings(metrics: ReIDMetrics, best_map: float | None) -> dict[str, str]:
@@ -137,9 +198,19 @@ def _metric_strings(metrics: ReIDMetrics, best_map: float | None) -> dict[str, s
     return values
 
 
-def _metric_message(values: dict[str, str]) -> str:
-    keys = ("mAP", "rank1", "best_mAP")
-    return " ".join(f"{key}={values[key]}" for key in keys if key in values)
+def _epoch_progress_message(epoch: int, values: Mapping[str, str], is_best: bool) -> str:
+    suffix = f" best={is_best}" if "mAP" in values else ""
+    return f"epoch={epoch} {_metric_message(values)}{suffix}"
+
+
+def _metric_message(values: Mapping[str, str]) -> str:
+    return " ".join(f"{key}={values[key]}" for key in _message_metric_keys(values))
+
+
+def _message_metric_keys(values: Mapping[str, str]) -> tuple[str, ...]:
+    train_keys = tuple(key for key in values if key not in VALIDATION_MESSAGE_KEYS)
+    validation_keys = tuple(key for key in VALIDATION_MESSAGE_KEYS if key in values)
+    return train_keys + validation_keys
 
 
 def _format_optional_metric(value: float | None) -> str:

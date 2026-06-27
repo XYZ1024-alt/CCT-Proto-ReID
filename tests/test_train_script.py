@@ -95,6 +95,8 @@ class TrainScriptTest(unittest.TestCase):
             runs = _runs_for_experiment(tracking_db, "T2C-CLIP-TrainScript-Test")
 
         self.assertEqual(exit_code, 0)
+        self.assertEqual(runs[0].data.metrics["train_loss"], 1.0)
+        self.assertEqual(runs[0].data.metrics["lr"], 0.1)
         self.assertEqual(runs[0].data.metrics["mAP"], 0.1)
         self.assertEqual(runs[0].data.metrics["rank_1"], 0.1)
 
@@ -108,6 +110,7 @@ def build_training_job(args) -> TrainingJob:
         loss = model(torch.eye(2)).sum() * epoch
         loss.backward()
         optimizer.step()
+        return {"loss": float(epoch), "lr": 0.1}
 
     def validate(epoch: int) -> ReIDMetrics:
         return ReIDMetrics(map=epoch / 10.0, cmc={1: epoch / 10.0})

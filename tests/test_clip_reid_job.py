@@ -26,9 +26,15 @@ class CLIPReIDJobTest(unittest.TestCase):
             root = _build_market_fixture(Path(tmp))
             job = build_training_job(_training_args(root), clip_loader=_load_fake_clip)
 
-            job.train_one_epoch(1)
+            train_metrics = job.train_one_epoch(1)
             metrics = job.validate(1)
 
+        self.assertIn("loss", train_metrics)
+        self.assertIn("clip_loss", train_metrics)
+        self.assertIn("reid_loss", train_metrics)
+        self.assertIn("triplet_loss", train_metrics)
+        self.assertIn("tfc_loss", train_metrics)
+        self.assertIn("lr", train_metrics)
         self.assertGreaterEqual(metrics.map, 0.0)
         self.assertIn(1, metrics.cmc)
 

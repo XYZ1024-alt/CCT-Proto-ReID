@@ -128,6 +128,43 @@ class TrainingLoopTest(unittest.TestCase):
             ],
         )
 
+    def test_training_metrics_are_reported_each_epoch(self):
+        logged: list[tuple[int, dict[str, float]]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            progress = TqdmLikeProgressRecorder()
+            run_training_loop(
+                model=torch.nn.Linear(2, 2),
+                optimizer=None,
+                config=TrainingLoopConfig(total_epochs=2, validation_interval=2, checkpoint_dir=Path(tmp)),
+                train_one_epoch=lambda epoch: {"loss": float(epoch), "lr": 0.01},
+                validate=lambda epoch: ReIDMetrics(map=0.25, cmc={1: 0.5}),
+                progress_factory=progress,
+                train_metric_logger=lambda epoch, metrics: logged.append((epoch, dict(metrics))),
+            )
+
+        self.assertEqual(
+            progress.postfixes,
+            [
+                {"loss": "1.0000", "lr": "0.0100"},
+                {"loss": "2.0000", "lr": "0.0100"},
+                {
+                    "loss": "2.0000",
+                    "lr": "0.0100",
+                    "mAP": "0.2500",
+                    "best_mAP": "0.2500",
+                    "rank1": "0.5000",
+                },
+            ],
+        )
+        self.assertEqual(
+            progress.messages,
+            [
+                "epoch=1 loss=1.0000 lr=0.0100",
+                "epoch=2 loss=2.0000 lr=0.0100 mAP=0.2500 rank1=0.5000 best_mAP=0.2500 best=True",
+            ],
+        )
+        self.assertEqual(logged, [(1, {"loss": 1.0, "lr": 0.01}), (2, {"loss": 2.0, "lr": 0.01})])
+
     def test_validation_metrics_are_sent_to_metric_logger(self):
         logged: list[tuple[int, ReIDMetrics, float | None, bool]] = []
         with tempfile.TemporaryDirectory() as tmp:

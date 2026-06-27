@@ -26,11 +26,18 @@ from t2c_clip.evaluation import ReIDMetrics, evaluate_reid
 from t2c_clip.model import T2CClipModel
 from t2c_clip.prompts import PromptBank, PromptConfig
 from t2c_clip.tfc import TFCCenterBank
-from t2c_clip.training import Stage2LossConfig, Stage2LossInputs, TrainingBatch, stage2_loss_breakdown
+from t2c_clip.training import (
+    Stage2LossBreakdown,
+    Stage2LossConfig,
+    Stage2LossInputs,
+    TrainingBatch,
+    stage2_loss_breakdown,
+)
 from t2c_clip.transforms import CLIPImageTransform
 
 DEFAULT_RANKS = (1, 5, 10)
 SUPPORTED_DATASETS = ("market1501", "msmt17")
+TRAIN_LOSS_METRIC_NAMES = ("loss", "clip_loss", "reid_loss", "triplet_loss", "tfc_loss")
 
 ClipLoader = Callable[[str], "CLIPLoadResult"]
 
@@ -264,16 +271,14 @@ def _loader(dataset: ReIDImageDataset, config: CLIPReIDJobConfig, shuffle: bool)
 
 
 def _train_one_epoch(runtime: TrainingRuntime):
-    def train(epoch: int) -> None:
+    def train(epoch: int) -> dict[str, float]:
         runtime.model.train()
+        totals = _empty_train_metric_totals()
+        batch_count = 0
         for batch in runtime.loaders.train:
-            training_batch = _training_batch(batch, runtime.device)
-            runtime.optimizer.zero_grad()
-            _update_tfc_centers(runtime.model, training_batch)
-            inputs = Stage2LossInputs(runtime.model.classifier, runtime.model.tfc_bank, runtime.loss_config)
-            loss = stage2_loss_breakdown(runtime.model.retrieval_model, training_batch, inputs).total
-            loss.backward()
-            runtime.optimizer.step()
+            totals = _add_train_metric_totals(totals, _train_batch(runtime, batch))
+            batch_count += 1
+        return _average_train_metrics(totals, batch_count, runtime.optimizer)
 
     return train
 
@@ -323,6 +328,58 @@ def _training_batch(batch: ReIDImageBatch, device: torch.device) -> TrainingBatc
         camera_ids=batch.camera_ids.to(device),
         person_ids=batch.person_ids.to(device),
     )
+
+
+def _train_batch(runtime: TrainingRuntime, batch: ReIDImageBatch) -> dict[str, float]:
+    training_batch = _training_batch(batch, runtime.device)
+    runtime.optimizer.zero_grad()
+    _update_tfc_centers(runtime.model, training_batch)
+    inputs = Stage2LossInputs(runtime.model.classifier, runtime.model.tfc_bank, runtime.loss_config)
+    breakdown = stage2_loss_breakdown(runtime.model.retrieval_model, training_batch, inputs)
+    values = _loss_metric_values(breakdown)
+    breakdown.total.backward()
+    runtime.optimizer.step()
+    return values
+
+
+def _empty_train_metric_totals() -> dict[str, float]:
+    return {name: 0.0 for name in TRAIN_LOSS_METRIC_NAMES}
+
+
+def _add_train_metric_totals(totals: dict[str, float], values: dict[str, float]) -> dict[str, float]:
+    return {name: totals[name] + values[name] for name in TRAIN_LOSS_METRIC_NAMES}
+
+
+def _average_train_metrics(
+    totals: dict[str, float],
+    batch_count: int,
+    optimizer: torch.optim.Optimizer,
+) -> dict[str, float]:
+    if batch_count < 1:
+        raise ValueError("training loader produced no batches")
+    averaged = {name: totals[name] / batch_count for name in TRAIN_LOSS_METRIC_NAMES}
+    averaged["lr"] = _optimizer_lr(optimizer)
+    return averaged
+
+
+def _loss_metric_values(breakdown: Stage2LossBreakdown) -> dict[str, float]:
+    return {
+        "loss": _tensor_metric_value(breakdown.total),
+        "clip_loss": _tensor_metric_value(breakdown.clip_dual),
+        "reid_loss": _tensor_metric_value(breakdown.identity),
+        "triplet_loss": _tensor_metric_value(breakdown.triplet),
+        "tfc_loss": _tensor_metric_value(breakdown.tfc),
+    }
+
+
+def _tensor_metric_value(value: torch.Tensor) -> float:
+    return float(value.detach().cpu())
+
+
+def _optimizer_lr(optimizer: torch.optim.Optimizer) -> float:
+    if not optimizer.param_groups:
+        raise ValueError("optimizer has no parameter groups")
+    return float(optimizer.param_groups[0]["lr"])
 
 
 def _update_tfc_centers(model: CLIPReIDTrainingModel, batch: TrainingBatch) -> None:

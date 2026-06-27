@@ -12,6 +12,7 @@ from t2c_clip.mlflow import (
     MLflowSQLiteConfig,
     initialize_mlflow_sqlite,
     log_reid_metrics_to_mlflow,
+    log_training_metrics_to_mlflow,
     mlflow_ui_command,
     sqlite_tracking_uri,
     start_mlflow_sqlite_run,
@@ -98,3 +99,33 @@ class MLflowSQLiteTest(unittest.TestCase):
         self.assertEqual(logged.data.metrics["rank_1"], 0.6)
         self.assertEqual(logged.data.metrics["is_best"], 1.0)
         self.assertEqual(logged.data.tags["t2c_clip.role"], "training")
+
+    def test_training_run_logs_train_metrics_to_sqlite_store(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = MLflowSQLiteConfig(
+                tracking_db=Path(tmp) / "tracking.db",
+                artifact_root=Path(tmp) / "artifacts",
+                experiment_name="T2C-CLIP-TrainMetric-Test",
+            )
+            with start_mlflow_sqlite_run(config, run_name="train-metric-test") as run:
+                log_training_metrics_to_mlflow(
+                    1,
+                    {
+                        "loss": 0.7,
+                        "clip_loss": 0.2,
+                        "reid_loss": 0.3,
+                        "triplet_loss": 0.1,
+                        "tfc_loss": 0.1,
+                        "lr": 0.001,
+                    },
+                )
+                run_id = run.run_id
+            client = MlflowClient(tracking_uri=run.tracking_uri)
+            logged = client.get_run(run_id)
+
+        self.assertEqual(logged.data.metrics["train_loss"], 0.7)
+        self.assertEqual(logged.data.metrics["train_clip_loss"], 0.2)
+        self.assertEqual(logged.data.metrics["train_reid_loss"], 0.3)
+        self.assertEqual(logged.data.metrics["train_triplet_loss"], 0.1)
+        self.assertEqual(logged.data.metrics["train_tfc_loss"], 0.1)
+        self.assertEqual(logged.data.metrics["lr"], 0.001)

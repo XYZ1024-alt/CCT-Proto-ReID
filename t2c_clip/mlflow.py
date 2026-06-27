@@ -105,6 +105,11 @@ def log_reid_metrics_to_mlflow(
         mlflow.log_metric(f"rank_{rank}", value, step=epoch)
 
 
+def log_training_metrics_to_mlflow(epoch: int, metrics: Mapping[str, float]) -> None:
+    for name, value in metrics.items():
+        mlflow.log_metric(_training_metric_name(name), float(value), step=epoch)
+
+
 def mlflow_ui_command(
     config: MLflowSQLiteConfig,
     host: str = DEFAULT_MLFLOW_UI_HOST,
@@ -162,3 +167,9 @@ def _run_tags(role: str, tags: Mapping[str, str] | None) -> dict[str, str]:
     if tags is not None:
         run_tags.update(tags)
     return run_tags
+
+
+def _training_metric_name(name: str) -> str:
+    if name == "lr":
+        return name
+    return f"train_{name}"
