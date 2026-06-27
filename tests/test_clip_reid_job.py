@@ -83,9 +83,39 @@ class CLIPReIDJobTest(unittest.TestCase):
         self.assertEqual(features.camera_ids, (1, 2))
         self.assertEqual(tuple(features.features.shape), (2, 4))
 
+    def test_no_freeze_image_encoder_stage2_reenables_encoder_after_stage1_freeze(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _build_market_fixture(Path(tmp))
+            args = _training_args(root)
+            args.stage1_epochs = 1
+            args.freeze_image_encoder_stage1 = True
+            args.freeze_image_encoder_stage2 = False
+
+            job = build_training_job(args, clip_loader=_load_fake_clip)
+
+        clip_model = job.stage2.model.retrieval_model.image_encoder.clip_model
+        self.assertGreater(_trainable_parameter_count(clip_model.visual_projection), 0)
+
+    def test_no_freeze_image_encoder_stage2_works_without_stage1_epochs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _build_market_fixture(Path(tmp))
+            args = _training_args(root)
+            args.stage1_epochs = 0
+            args.freeze_image_encoder_stage1 = True
+            args.freeze_image_encoder_stage2 = False
+
+            job = build_training_job(args, clip_loader=_load_fake_clip)
+
+        clip_model = job.model.retrieval_model.image_encoder.clip_model
+        self.assertGreater(_trainable_parameter_count(clip_model.visual_projection), 0)
+
 
 def _load_fake_clip(model_name: str) -> CLIPLoadResult:
     return CLIPLoadResult(FakeCLIP(hidden_size=8, projection_dim=4), ImageAwareFakeImageProcessor(), tokenizer=None)
+
+
+def _trainable_parameter_count(module: torch.nn.Module) -> int:
+    return sum(parameter.numel() for parameter in module.parameters() if parameter.requires_grad)
 
 
 class TrainBatchReporterRecorder:

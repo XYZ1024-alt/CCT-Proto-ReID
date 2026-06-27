@@ -290,18 +290,22 @@ def _build_runtimes(
 def _apply_freezing(model: CLIPReIDTrainingModel, config: CLIPReIDJobConfig, stage: str) -> None:
     retrieval = model.retrieval_model
     clip_model = _clip_model_for(retrieval)
-    if stage == STAGE1 and config.freeze_image_encoder_stage1:
-        _set_module_requires_grad(clip_model.vision_model, False)
-        _set_module_requires_grad(clip_model.visual_projection, False)
-    if stage == STAGE2 and config.freeze_image_encoder_stage2:
-        _set_module_requires_grad(clip_model.vision_model, False)
-        _set_module_requires_grad(clip_model.visual_projection, False)
-    if config.freeze_text_encoder:
-        _set_module_requires_grad(clip_model.text_model, False)
-        _set_module_requires_grad(clip_model.text_projection, False)
+    image_trainable = _image_encoder_trainable(config, stage)
+    text_trainable = not config.freeze_text_encoder
+    _set_module_requires_grad(clip_model.vision_model, image_trainable)
+    _set_module_requires_grad(clip_model.visual_projection, image_trainable)
+    _set_module_requires_grad(clip_model.text_model, text_trainable)
+    _set_module_requires_grad(clip_model.text_projection, text_trainable)
     retrieval.prompt_bank.requires_grad_(True)
-    # Stage-1 has no classifier signal; keep classifier frozen to avoid bias-only drift.
     model.classifier.requires_grad_(stage == STAGE2)
+
+
+def _image_encoder_trainable(config: CLIPReIDJobConfig, stage: str) -> bool:
+    if stage == STAGE1:
+        return not config.freeze_image_encoder_stage1
+    if stage == STAGE2:
+        return not config.freeze_image_encoder_stage2
+    raise ValueError(f"unknown training stage: {stage!r}")
 
 
 def _clip_model_for(retrieval_model: T2CClipModel) -> torch.nn.Module:
