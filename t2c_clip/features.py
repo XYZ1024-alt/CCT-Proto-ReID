@@ -1,0 +1,20 @@
+"""Feature normalization and fusion helpers."""
+
+from __future__ import annotations
+
+import torch
+from torch.nn import functional as F
+
+DEFAULT_EPS = 1e-12
+
+
+def l2_normalize(features: torch.Tensor, eps: float = DEFAULT_EPS) -> torch.Tensor:
+    if features.ndim < 2:
+        raise ValueError("features must have at least two dimensions")
+    return F.normalize(features, p=2.0, dim=-1, eps=eps)
+
+
+def fuse_features(visual: torch.Tensor, text: torch.Tensor, beta: float) -> torch.Tensor:
+    if visual.shape != text.shape:
+        raise ValueError(f"visual and text shapes must match: {visual.shape} != {text.shape}")
+    return l2_normalize(l2_normalize(visual) + beta * l2_normalize(text))

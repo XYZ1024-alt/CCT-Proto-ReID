@@ -1,0 +1,43 @@
+import unittest
+
+import torch
+
+from t2c_clip.features import fuse_features, l2_normalize
+from t2c_clip.prompts import PromptBank, PromptConfig
+
+
+class FeaturePromptTest(unittest.TestCase):
+    def test_l2_normalize_returns_unit_rows(self):
+        output = l2_normalize(torch.tensor([[3.0, 4.0]]))
+        self.assertTrue(torch.allclose(output.norm(dim=1), torch.ones(1)))
+
+    def test_fuse_features_uses_beta_and_normalizes(self):
+        visual = torch.tensor([[1.0, 0.0]])
+        text = torch.tensor([[0.0, 1.0]])
+        fused = fuse_features(visual, text, beta=1.0)
+        expected = torch.tensor([[2 ** -0.5, 2 ** -0.5]])
+        self.assertTrue(torch.allclose(fused, expected))
+
+    def test_prompt_bank_training_adds_identity_prompt(self):
+        bank = PromptBank(PromptConfig(num_cameras=2, num_train_ids=3, context_length=2, embedding_dim=2))
+        with torch.no_grad():
+            bank.global_prompt.fill_(1.0)
+            bank.camera_prompts.zero_()
+            bank.identity_prompts.zero_()
+            bank.camera_prompts[1].fill_(2.0)
+            bank.identity_prompts[2].fill_(4.0)
+
+        prompt = bank.training_prompts(torch.tensor([1]), torch.tensor([2]))
+
+        self.assertTrue(torch.equal(prompt, torch.full((1, 2, 2), 7.0)))
+
+    def test_prompt_bank_inference_excludes_identity_prompt(self):
+        bank = PromptBank(PromptConfig(num_cameras=2, num_train_ids=3, context_length=1, embedding_dim=2))
+        with torch.no_grad():
+            bank.global_prompt.fill_(1.0)
+            bank.camera_prompts[1].fill_(2.0)
+            bank.identity_prompts[2].fill_(4.0)
+
+        prompt = bank.inference_prompts(torch.tensor([1]))
+
+        self.assertTrue(torch.equal(prompt, torch.full((1, 1, 2), 3.0)))
