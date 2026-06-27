@@ -30,6 +30,14 @@ class CLIPTrainingComponentsTest(unittest.TestCase):
         self.assertTrue(torch.equal(output, torch.full((2, 2), 2.0)))
         self.assertTrue(clip.image_called)
 
+    def test_transformers_clip_image_encoder_reads_pooler_output(self):
+        clip = FakePoolingOutputCLIP(projection_dim=2)
+        encoder = TransformersCLIPImageEncoder(clip)
+
+        output = encoder(torch.ones(2, 3, 2, 2))
+
+        self.assertTrue(torch.equal(output, torch.full((2, 2), 3.0)))
+
     def test_prompt_text_encoder_projects_mean_prompt(self):
         encoder = PromptTextEncoder(prompt_embedding_dim=3, output_dim=2)
         with torch.no_grad():
@@ -65,6 +73,21 @@ class FakeCLIP(torch.nn.Module):
     def get_image_features(self, pixel_values):
         self.image_called = True
         return torch.full((pixel_values.shape[0], self.config.projection_dim), 2.0)
+
+
+class FakePoolingOutputCLIP(torch.nn.Module):
+    def __init__(self, projection_dim: int):
+        super().__init__()
+        self.config = FakeConfig(projection_dim)
+
+    def get_image_features(self, pixel_values):
+        features = torch.full((pixel_values.shape[0], self.config.projection_dim), 3.0)
+        return FakePoolingOutput(features)
+
+
+class FakePoolingOutput:
+    def __init__(self, pooler_output: torch.Tensor):
+        self.pooler_output = pooler_output
 
 
 class FakeConfig:

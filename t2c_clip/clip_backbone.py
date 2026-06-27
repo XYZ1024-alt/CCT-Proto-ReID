@@ -13,7 +13,8 @@ class TransformersCLIPImageEncoder(torch.nn.Module):
         self.clip_model = clip_model
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
-        return self.clip_model.get_image_features(pixel_values=images)
+        output = self.clip_model.get_image_features(pixel_values=images)
+        return _image_features_tensor(output)
 
 
 class PromptTextEncoder(torch.nn.Module):
@@ -35,6 +36,15 @@ def clip_projection_dim(clip_model: Any) -> int:
         raise ValueError("CLIP model config must expose integer projection_dim")
     _require_positive(projection_dim, "projection_dim")
     return projection_dim
+
+
+def _image_features_tensor(output: Any) -> torch.Tensor:
+    if isinstance(output, torch.Tensor):
+        return output
+    pooler_output = getattr(output, "pooler_output", None)
+    if isinstance(pooler_output, torch.Tensor):
+        return pooler_output
+    raise TypeError("CLIP image features must be a tensor or expose tensor pooler_output")
 
 
 def _require_positive(value: int, name: str) -> None:
