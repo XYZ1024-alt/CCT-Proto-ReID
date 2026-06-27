@@ -271,12 +271,14 @@ def _loader(dataset: ReIDImageDataset, config: CLIPReIDJobConfig, shuffle: bool)
 
 
 def _train_one_epoch(runtime: TrainingRuntime):
-    def train(epoch: int) -> dict[str, float]:
+    def train(epoch: int, reporter) -> dict[str, float]:
         runtime.model.train()
         totals = _empty_train_metric_totals()
         batch_count = 0
-        for batch in runtime.loaders.train:
-            totals = _add_train_metric_totals(totals, _train_batch(runtime, batch))
+        for batch in reporter.batches(runtime.loaders.train):
+            values = _train_batch(runtime, batch)
+            reporter.report_batch(values)
+            totals = _add_train_metric_totals(totals, values)
             batch_count += 1
         return _average_train_metrics(totals, batch_count, runtime.optimizer)
 
@@ -339,6 +341,7 @@ def _train_batch(runtime: TrainingRuntime, batch: ReIDImageBatch) -> dict[str, f
     values = _loss_metric_values(breakdown)
     breakdown.total.backward()
     runtime.optimizer.step()
+    values["lr"] = _optimizer_lr(runtime.optimizer)
     return values
 
 

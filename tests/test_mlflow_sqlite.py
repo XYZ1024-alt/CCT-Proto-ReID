@@ -12,6 +12,7 @@ from t2c_clip.mlflow import (
     MLflowSQLiteConfig,
     initialize_mlflow_sqlite,
     log_reid_metrics_to_mlflow,
+    log_training_step_metrics_to_mlflow,
     log_training_metrics_to_mlflow,
     mlflow_ui_command,
     sqlite_tracking_uri,
@@ -129,3 +130,22 @@ class MLflowSQLiteTest(unittest.TestCase):
         self.assertEqual(logged.data.metrics["train_triplet_loss"], 0.1)
         self.assertEqual(logged.data.metrics["train_tfc_loss"], 0.1)
         self.assertEqual(logged.data.metrics["lr"], 0.001)
+
+    def test_training_run_logs_step_train_metrics_to_sqlite_store(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = MLflowSQLiteConfig(
+                tracking_db=Path(tmp) / "tracking.db",
+                artifact_root=Path(tmp) / "artifacts",
+                experiment_name="T2C-CLIP-TrainStepMetric-Test",
+            )
+            with start_mlflow_sqlite_run(config, run_name="train-step-metric-test") as run:
+                log_training_step_metrics_to_mlflow(1, {"loss": 0.7, "lr": 0.001})
+                log_training_step_metrics_to_mlflow(2, {"loss": 0.6, "lr": 0.001})
+                run_id = run.run_id
+            client = MlflowClient(tracking_uri=run.tracking_uri)
+            loss_history = client.get_metric_history(run_id, "train_step_loss")
+            lr_history = client.get_metric_history(run_id, "train_step_lr")
+
+        self.assertEqual([point.step for point in loss_history], [1, 2])
+        self.assertEqual([point.value for point in loss_history], [0.7, 0.6])
+        self.assertEqual([point.step for point in lr_history], [1, 2])

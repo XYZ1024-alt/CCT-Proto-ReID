@@ -25,10 +25,12 @@ class CLIPReIDJobTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = _build_market_fixture(Path(tmp))
             job = build_training_job(_training_args(root), clip_loader=_load_fake_clip)
+            reporter = TrainBatchReporterRecorder()
 
-            train_metrics = job.train_one_epoch(1)
+            train_metrics = job.train_one_epoch(1, reporter)
             metrics = job.validate(1)
 
+        self.assertEqual(len(reporter.batch_reports), 1)
         self.assertIn("loss", train_metrics)
         self.assertIn("clip_loss", train_metrics)
         self.assertIn("reid_loss", train_metrics)
@@ -66,6 +68,17 @@ class FakeImageProcessor:
 
 def _load_fake_clip(model_name: str) -> CLIPLoadResult:
     return CLIPLoadResult(FakeCLIP(), FakeImageProcessor())
+
+
+class TrainBatchReporterRecorder:
+    def __init__(self):
+        self.batch_reports: list[dict[str, float]] = []
+
+    def batches(self, iterable):
+        return iterable
+
+    def report_batch(self, metrics):
+        self.batch_reports.append(dict(metrics))
 
 
 def _training_args(root: Path) -> Namespace:

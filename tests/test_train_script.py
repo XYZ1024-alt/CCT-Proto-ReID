@@ -93,10 +93,13 @@ class TrainScriptTest(unittest.TestCase):
                 progress_factory=lambda iterable, **kwargs: iterable,
             )
             runs = _runs_for_experiment(tracking_db, "T2C-CLIP-TrainScript-Test")
+            step_history = _metric_history(tracking_db, runs[0].info.run_id, "train_step_loss")
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(runs[0].data.metrics["train_loss"], 1.0)
         self.assertEqual(runs[0].data.metrics["lr"], 0.1)
+        self.assertEqual([point.step for point in step_history], [1, 2])
+        self.assertEqual([point.value for point in step_history], [1.1, 1.2])
         self.assertEqual(runs[0].data.metrics["mAP"], 0.1)
         self.assertEqual(runs[0].data.metrics["rank_1"], 0.1)
 
@@ -105,11 +108,13 @@ def build_training_job(args) -> TrainingJob:
     model = torch.nn.Linear(2, 2)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
 
-    def train_one_epoch(epoch: int) -> None:
-        optimizer.zero_grad()
-        loss = model(torch.eye(2)).sum() * epoch
-        loss.backward()
-        optimizer.step()
+    def train_one_epoch(epoch: int, reporter) -> dict[str, float]:
+        for batch_number in reporter.batches([1, 2]):
+            optimizer.zero_grad()
+            loss = model(torch.eye(2)).sum() * (epoch + batch_number / 10.0)
+            loss.backward()
+            optimizer.step()
+            reporter.report_batch({"loss": epoch + batch_number / 10.0, "lr": 0.1})
         return {"loss": float(epoch), "lr": 0.1}
 
     def validate(epoch: int) -> ReIDMetrics:
@@ -155,3 +160,8 @@ def _runs_for_experiment(tracking_db: Path, experiment_name: str):
     client = MlflowClient(tracking_uri=sqlite_tracking_uri(tracking_db))
     experiment = client.get_experiment_by_name(experiment_name)
     return client.search_runs([experiment.experiment_id])
+
+
+def _metric_history(tracking_db: Path, run_id: str, metric_name: str):
+    client = MlflowClient(tracking_uri=sqlite_tracking_uri(tracking_db))
+    return client.get_metric_history(run_id, metric_name)

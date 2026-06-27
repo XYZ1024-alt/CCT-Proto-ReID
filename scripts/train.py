@@ -13,10 +13,18 @@ from typing import Sequence
 import torch
 
 from t2c_clip.evaluation import ReIDMetrics
-from t2c_clip.loops import MetricLogger, TrainMetricLogger, TrainingLoopConfig, run_training_loop
+from t2c_clip.loops import (
+    MetricLogger,
+    TrainMetricLogger,
+    TrainStepMetricLogger,
+    TrainingEpochReporter,
+    TrainingLoopConfig,
+    run_training_loop,
+)
 from t2c_clip.mlflow import (
     MLflowSQLiteConfig,
     log_reid_metrics_to_mlflow,
+    log_training_step_metrics_to_mlflow,
     log_training_metrics_to_mlflow,
     start_mlflow_sqlite_run,
 )
@@ -40,7 +48,7 @@ DEFAULT_TRIPLET_MARGIN = 0.3
 DEFAULT_TFC_WEIGHT = 1.0
 SUPPORTED_DATASETS = ("market1501", "msmt17")
 
-TrainOneEpoch = Callable[[int], dict[str, float] | None]
+TrainOneEpoch = Callable[[int, TrainingEpochReporter], dict[str, float] | None]
 ValidateEpoch = Callable[[int], ReIDMetrics]
 JobBuilder = Callable[[argparse.Namespace], "TrainingJob"]
 ProgressFactory = Callable[[Iterable[int]], Iterable[int]]
@@ -63,7 +71,14 @@ def main(argv: Sequence[str] | None = None, progress_factory: ProgressFactory | 
             validation_interval=args.validation_interval,
             checkpoint_dir=args.checkpoint_dir,
         )
-        _run_loop(job, config, progress_factory, _metric_logger_if_requested(args), _train_logger_if_requested(args))
+        _run_loop(
+            job,
+            config,
+            progress_factory,
+            _metric_logger_if_requested(args),
+            _train_logger_if_requested(args),
+            _train_step_logger_if_requested(args),
+        )
     return 0
 
 
@@ -116,12 +131,19 @@ def _train_logger_if_requested(args: argparse.Namespace) -> TrainMetricLogger | 
     return log_training_metrics_to_mlflow
 
 
+def _train_step_logger_if_requested(args: argparse.Namespace) -> TrainStepMetricLogger | None:
+    if not args.enable_mlflow:
+        return None
+    return log_training_step_metrics_to_mlflow
+
+
 def _run_loop(
     job: TrainingJob,
     config: TrainingLoopConfig,
     progress_factory: ProgressFactory | None,
     metric_logger: MetricLogger | None,
     train_metric_logger: TrainMetricLogger | None,
+    train_step_metric_logger: TrainStepMetricLogger | None,
 ) -> None:
     if progress_factory is None:
         run_training_loop(
@@ -132,6 +154,7 @@ def _run_loop(
             job.validate,
             metric_logger=metric_logger,
             train_metric_logger=train_metric_logger,
+            train_step_metric_logger=train_step_metric_logger,
         )
         return
     run_training_loop(
@@ -143,6 +166,7 @@ def _run_loop(
         progress_factory,
         metric_logger=metric_logger,
         train_metric_logger=train_metric_logger,
+        train_step_metric_logger=train_step_metric_logger,
     )
 
 

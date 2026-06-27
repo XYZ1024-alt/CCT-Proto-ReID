@@ -110,6 +110,11 @@ def log_training_metrics_to_mlflow(epoch: int, metrics: Mapping[str, float]) -> 
         mlflow.log_metric(_training_metric_name(name), float(value), step=epoch)
 
 
+def log_training_step_metrics_to_mlflow(train_step: int, metrics: Mapping[str, float]) -> None:
+    for name, value in metrics.items():
+        mlflow.log_metric(_training_step_metric_name(name), float(value), step=train_step)
+
+
 def mlflow_ui_command(
     config: MLflowSQLiteConfig,
     host: str = DEFAULT_MLFLOW_UI_HOST,
@@ -173,3 +178,7 @@ def _training_metric_name(name: str) -> str:
     if name == "lr":
         return name
     return f"train_{name}"
+
+
+def _training_step_metric_name(name: str) -> str:
+    return f"train_step_{name}"
