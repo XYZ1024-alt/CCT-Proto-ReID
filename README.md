@@ -56,6 +56,28 @@ The evaluator performs standard Image-to-Image ReID scoring without rerank. Same
 
 The loop calls real `torch.save` and lets training, validation, tqdm, and checkpoint errors surface directly.
 
+## Train Entrypoint
+
+`scripts/train.py` wires a project-specific training job into `run_training_loop`.
+It requires a real job builder function:
+
+```bash
+wsl --cd /mnt/d/Code/T2C-CLIP /home/xyz10/miniconda3/bin/conda run -n reid python scripts/train.py --job-builder your_package.your_module:build_training_job --epochs 120 --validation-interval 5 --checkpoint-dir checkpoints
+```
+
+The builder receives parsed CLI args and must return `scripts.train.TrainingJob` with:
+
+- `model`
+- `optimizer`
+- `train_one_epoch(epoch)`
+- `validate(epoch)` returning `ReIDMetrics`
+
+Add `--enable-mlflow` to initialize the SQLite-backed MLflow store before training:
+
+```bash
+wsl --cd /mnt/d/Code/T2C-CLIP /home/xyz10/miniconda3/bin/conda run -n reid python scripts/train.py --job-builder your_package.your_module:build_training_job --epochs 120 --validation-interval 5 --checkpoint-dir checkpoints --enable-mlflow --tracking-db mlflow/t2c_clip.db --artifact-root mlruns --experiment-name T2C-CLIP --run-name train
+```
+
 ## MLflow SQLite Tracking
 
 Initialize the local SQLite-backed MLflow store:
