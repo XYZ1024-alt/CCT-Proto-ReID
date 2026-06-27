@@ -14,6 +14,7 @@ from scripts.train import TrainingJob
 from t2c_clip.clip_backbone import PromptTextEncoder, TransformersCLIPImageEncoder, clip_projection_dim
 from t2c_clip.data import ReIDSample, load_market_split, load_msmt17_manifest
 from t2c_clip.datasets import (
+    IdentityBalancedBatchSampler,
     ReIDImageBatch,
     ReIDImageDataset,
     ReIDImageDatasetConfig,
@@ -236,9 +237,19 @@ def _build_training_model(
 
 def _build_loaders(data: DatasetBundle, config: CLIPReIDJobConfig) -> LoaderBundle:
     return LoaderBundle(
-        train=_loader(data.train, config, shuffle=True),
+        train=_train_loader(data.train, config),
         query=_loader(data.query, config, shuffle=False),
         gallery=_loader(data.gallery, config, shuffle=False),
+    )
+
+
+def _train_loader(dataset: ReIDImageDataset, config: CLIPReIDJobConfig) -> DataLoader:
+    sampler = IdentityBalancedBatchSampler(dataset.person_ids, batch_size=config.batch_size)
+    return DataLoader(
+        dataset,
+        batch_sampler=sampler,
+        num_workers=config.num_workers,
+        collate_fn=collate_reid_batches,
     )
 
 

@@ -32,6 +32,13 @@ class CLIPReIDJobTest(unittest.TestCase):
         self.assertGreaterEqual(metrics.map, 0.0)
         self.assertIn(1, metrics.cmc)
 
+    def test_build_training_job_rejects_training_split_without_positive_pairs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _build_market_fixture_without_positive_pairs(Path(tmp))
+
+            with self.assertRaises(ValueError):
+                build_training_job(_training_args(root), clip_loader=_load_fake_clip)
+
 
 class FakeCLIP(torch.nn.Module):
     def __init__(self):
@@ -60,7 +67,7 @@ def _training_args(root: Path) -> Namespace:
         dataset="market1501",
         data_root=root,
         clip_model_name="fake-clip",
-        batch_size=3,
+        batch_size=4,
         num_workers=0,
         lr=0.001,
         device="cpu",
@@ -76,9 +83,18 @@ def _build_market_fixture(root: Path) -> Path:
     _write_market_image(root / "bounding_box_train" / "0001_c1s1_000001_01.jpg", "red")
     _write_market_image(root / "bounding_box_train" / "0001_c2s1_000002_01.jpg", "red")
     _write_market_image(root / "bounding_box_train" / "0002_c1s1_000003_01.jpg", "blue")
+    _write_market_image(root / "bounding_box_train" / "0002_c2s1_000004_01.jpg", "blue")
     _write_market_image(root / "query" / "0003_c1s1_000004_01.jpg", "green")
     _write_market_image(root / "bounding_box_test" / "0003_c2s1_000005_01.jpg", "green")
     _write_market_image(root / "bounding_box_test" / "0004_c1s1_000006_01.jpg", "blue")
+    return root
+
+
+def _build_market_fixture_without_positive_pairs(root: Path) -> Path:
+    _write_market_image(root / "bounding_box_train" / "0001_c1s1_000001_01.jpg", "red")
+    _write_market_image(root / "bounding_box_train" / "0002_c1s1_000002_01.jpg", "blue")
+    _write_market_image(root / "query" / "0003_c1s1_000003_01.jpg", "green")
+    _write_market_image(root / "bounding_box_test" / "0003_c2s1_000004_01.jpg", "green")
     return root
 
 

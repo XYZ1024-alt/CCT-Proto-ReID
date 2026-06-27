@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+import random
 
 from PIL import Image
 import torch
@@ -11,6 +12,8 @@ import torch
 from t2c_clip.data import ReIDSample
 
 ImageTransform = Callable[[Image.Image], torch.Tensor]
+MIN_IDENTITIES_PER_BATCH = 2
+DEFAULT_INSTANCES_PER_IDENTITY = 2
 
 
 @dataclass(frozen=True)
@@ -46,11 +49,15 @@ class ReIDImageDataset(torch.utils.data.Dataset):
     def __len__(self) -> int:
         return len(self._config.samples)
 
+    @property
+    def person_ids(self) -> tuple[int, ...]:
+        return tuple(self._mapped_person_id(sample) for sample in self._config.samples)
+
     def __getitem__(self, index: int) -> ReIDImageItem:
         sample = self._config.samples[index]
         return ReIDImageItem(
             image=self._load_image(sample),
-            person_id=_map_value(self._config.person_id_map, sample.person_id, "person_id"),
+            person_id=self._mapped_person_id(sample),
             camera_id=_map_value(self._config.camera_id_map, sample.camera_id, "camera_id"),
             original_person_id=sample.person_id,
             original_camera_id=sample.camera_id,
@@ -59,6 +66,39 @@ class ReIDImageDataset(torch.utils.data.Dataset):
     def _load_image(self, sample: ReIDSample) -> torch.Tensor:
         with Image.open(sample.image_path) as image:
             return self._config.transform(image.convert("RGB"))
+
+    def _mapped_person_id(self, sample: ReIDSample) -> int:
+        return _map_value(self._config.person_id_map, sample.person_id, "person_id")
+
+
+class IdentityBalancedBatchSampler(torch.utils.data.Sampler[list[int]]):
+    def __init__(
+        self,
+        labels: Sequence[int],
+        batch_size: int,
+        instances_per_identity: int = DEFAULT_INSTANCES_PER_IDENTITY,
+    ):
+        self._labels = tuple(labels)
+        self._batch_size = batch_size
+        self._instances_per_identity = instances_per_identity
+        self._identities_per_batch = _identities_per_batch(batch_size, instances_per_identity)
+        self._groups = _eligible_identity_groups(self._labels, instances_per_identity)
+        _validate_identity_groups(self._groups, self._identities_per_batch, instances_per_identity)
+
+    def __iter__(self):
+        for _ in range(len(self)):
+            yield self._sample_batch()
+
+    def __len__(self) -> int:
+        return max(1, len(self._labels) // self._batch_size)
+
+    def _sample_batch(self) -> list[int]:
+        labels = random.sample(tuple(self._groups), self._identities_per_batch)
+        return [
+            index
+            for label in labels
+            for index in random.sample(self._groups[label], self._instances_per_identity)
+        ]
 
 
 def build_person_id_map(samples: Sequence[ReIDSample]) -> dict[int, int]:
@@ -77,6 +117,33 @@ def collate_reid_batches(items: Sequence[ReIDImageItem]) -> ReIDImageBatch:
         original_person_ids=tuple(item.original_person_id for item in items),
         original_camera_ids=tuple(item.original_camera_id for item in items),
     )
+
+
+def _identities_per_batch(batch_size: int, instances_per_identity: int) -> int:
+    if batch_size < MIN_IDENTITIES_PER_BATCH * instances_per_identity:
+        raise ValueError("batch_size must allow at least two identities with positive pairs")
+    if batch_size % instances_per_identity != 0:
+        raise ValueError("batch_size must be divisible by instances_per_identity")
+    return batch_size // instances_per_identity
+
+
+def _eligible_identity_groups(labels: Sequence[int], instances_per_identity: int) -> dict[int, list[int]]:
+    groups: dict[int, list[int]] = {}
+    for index, label in enumerate(labels):
+        groups.setdefault(label, []).append(index)
+    return {label: indices for label, indices in groups.items() if len(indices) >= instances_per_identity}
+
+
+def _validate_identity_groups(
+    groups: Mapping[int, list[int]],
+    identities_per_batch: int,
+    instances_per_identity: int,
+) -> None:
+    if len(groups) < identities_per_batch:
+        raise ValueError(
+            "identity-balanced sampling requires at least "
+            f"{identities_per_batch} identities with {instances_per_identity} images each"
+        )
 
 
 def _build_index_map(values) -> dict[int, int]:

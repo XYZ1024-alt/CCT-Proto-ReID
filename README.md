@@ -109,6 +109,8 @@ Useful training arguments:
 - `--triplet-margin 0.3`
 - `--tfc-weight 1.0`
 
+Training uses identity-balanced batches for batch-hard triplet loss. Each train batch samples two images per identity, so `--batch-size 64` means `32 identities x 2 images`. If the training split cannot provide enough identities with positive pairs for the configured batch size, startup fails with an explicit error.
+
 Add `--enable-mlflow` to initialize the SQLite-backed MLflow store before training:
 
 ```bash

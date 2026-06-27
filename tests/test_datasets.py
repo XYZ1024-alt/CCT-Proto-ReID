@@ -1,3 +1,4 @@
+from collections import Counter
 from pathlib import Path
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ import torch
 
 from t2c_clip.data import ReIDSample
 from t2c_clip.datasets import (
+    IdentityBalancedBatchSampler,
     ReIDImageDatasetConfig,
     ReIDImageDataset,
     build_camera_id_map,
@@ -53,6 +55,22 @@ class ReIDImageDatasetTest(unittest.TestCase):
         self.assertTrue(torch.equal(batch.camera_ids, torch.tensor([1, 0])))
         self.assertEqual(batch.original_person_ids, (9, 4))
         self.assertEqual(batch.original_camera_ids, (3, 1))
+
+    def test_identity_balanced_batch_sampler_groups_positive_and_negative_pairs(self):
+        labels = [0, 0, 0, 1, 1, 1, 2, 2]
+        sampler = IdentityBalancedBatchSampler(labels, batch_size=4, instances_per_identity=2)
+
+        batch = next(iter(sampler))
+        counts = Counter(labels[index] for index in batch)
+
+        self.assertEqual(len(counts), 2)
+        self.assertEqual(set(counts.values()), {2})
+
+    def test_identity_balanced_batch_sampler_rejects_missing_positive_pairs(self):
+        labels = [0, 1, 2, 3]
+
+        with self.assertRaises(ValueError):
+            IdentityBalancedBatchSampler(labels, batch_size=4, instances_per_identity=2)
 
 
 def _tensor_transform(image: Image.Image) -> torch.Tensor:
