@@ -4,10 +4,12 @@ import io
 import tempfile
 import unittest
 
+from mlflow.tracking import MlflowClient
 import torch
 
 from scripts.train import TrainingJob, main
 from t2c_clip.evaluation import ReIDMetrics
+from t2c_clip.mlflow import sqlite_tracking_uri
 
 RECORDED_ARGS = None
 
@@ -63,6 +65,39 @@ class TrainScriptTest(unittest.TestCase):
         self.assertEqual(RECORDED_ARGS.lr, 0.001)
         self.assertEqual(RECORDED_ARGS.device, "cpu")
 
+    def test_main_logs_validation_metrics_when_mlflow_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tracking_db = Path(tmp) / "mlflow" / "tracking.db"
+            artifact_root = Path(tmp) / "mlruns"
+            checkpoint_dir = Path(tmp) / "checkpoints"
+            exit_code = main(
+                [
+                    "--job-builder",
+                    f"{__name__}:build_training_job",
+                    "--epochs",
+                    "1",
+                    "--validation-interval",
+                    "1",
+                    "--checkpoint-dir",
+                    str(checkpoint_dir),
+                    "--enable-mlflow",
+                    "--tracking-db",
+                    str(tracking_db),
+                    "--artifact-root",
+                    str(artifact_root),
+                    "--experiment-name",
+                    "T2C-CLIP-TrainScript-Test",
+                    "--run-name",
+                    "train-script-test",
+                ],
+                progress_factory=lambda iterable, **kwargs: iterable,
+            )
+            runs = _runs_for_experiment(tracking_db, "T2C-CLIP-TrainScript-Test")
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(runs[0].data.metrics["mAP"], 0.1)
+        self.assertEqual(runs[0].data.metrics["rank_1"], 0.1)
+
 
 def build_training_job(args) -> TrainingJob:
     model = torch.nn.Linear(2, 2)
@@ -111,3 +146,9 @@ def _recording_job_args(checkpoint_dir: Path) -> list[str]:
         "--device",
         "cpu",
     ]
+
+
+def _runs_for_experiment(tracking_db: Path, experiment_name: str):
+    client = MlflowClient(tracking_uri=sqlite_tracking_uri(tracking_db))
+    experiment = client.get_experiment_by_name(experiment_name)
+    return client.search_runs([experiment.experiment_id])

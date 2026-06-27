@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
 import mlflow
 from mlflow.tracking import MlflowClient
+
+from t2c_clip.evaluation import ReIDMetrics
 
 DEFAULT_TRACKING_DB = Path("mlflow") / "t2c_clip.db"
 DEFAULT_ARTIFACT_ROOT = Path("mlruns")
@@ -65,6 +69,42 @@ def initialize_mlflow_sqlite(
     )
 
 
+@contextmanager
+def start_mlflow_sqlite_run(
+    config: MLflowSQLiteConfig,
+    run_name: str,
+    tags: Mapping[str, str] | None = None,
+) -> Iterator[MLflowInitialization]:
+    tracking_uri, artifact_uri, experiment_id = _prepare_tracking_context(config)
+    run_tags = _run_tags("training", tags)
+    with mlflow.start_run(experiment_id=experiment_id, run_name=run_name) as run:
+        mlflow.set_tags(run_tags)
+        mlflow.log_param("tracking_backend", "sqlite")
+        mlflow.log_param("artifact_root", artifact_uri)
+        yield MLflowInitialization(
+            tracking_uri=tracking_uri,
+            artifact_uri=artifact_uri,
+            experiment_id=experiment_id,
+            run_id=run.info.run_id,
+            experiment_name=config.experiment_name,
+            ui_command=mlflow_ui_command(config),
+        )
+
+
+def log_reid_metrics_to_mlflow(
+    epoch: int,
+    metrics: ReIDMetrics,
+    best_map: float | None,
+    is_best: bool,
+) -> None:
+    mlflow.log_metric("mAP", metrics.map, step=epoch)
+    if best_map is not None:
+        mlflow.log_metric("best_mAP", best_map, step=epoch)
+    mlflow.log_metric("is_best", float(is_best), step=epoch)
+    for rank, value in metrics.cmc.items():
+        mlflow.log_metric(f"rank_{rank}", value, step=epoch)
+
+
 def mlflow_ui_command(
     config: MLflowSQLiteConfig,
     host: str = DEFAULT_MLFLOW_UI_HOST,
@@ -84,6 +124,16 @@ def _prepare_paths(config: MLflowSQLiteConfig) -> None:
     config.artifact_root.expanduser().mkdir(parents=True, exist_ok=True)
 
 
+def _prepare_tracking_context(config: MLflowSQLiteConfig) -> tuple[str, str, str]:
+    _prepare_paths(config)
+    tracking_uri = sqlite_tracking_uri(config.tracking_db)
+    artifact_uri = file_artifact_uri(config.artifact_root)
+    mlflow.set_tracking_uri(tracking_uri)
+    client = MlflowClient(tracking_uri=tracking_uri)
+    experiment_id = _ensure_experiment(client, config.experiment_name, artifact_uri)
+    return tracking_uri, artifact_uri, experiment_id
+
+
 def _ensure_experiment(client: MlflowClient, name: str, artifact_uri: str) -> str:
     experiment = client.get_experiment_by_name(name)
     if experiment is None:
@@ -99,11 +149,16 @@ def _start_initialization_run(
     artifact_uri: str,
     tags: Mapping[str, str] | None,
 ) -> str:
-    run_tags = {"t2c_clip.role": "mlflow_sqlite_init"}
-    if tags is not None:
-        run_tags.update(tags)
+    run_tags = _run_tags("mlflow_sqlite_init", tags)
     with mlflow.start_run(experiment_id=experiment_id, run_name=run_name) as run:
         mlflow.set_tags(run_tags)
         mlflow.log_param("tracking_backend", "sqlite")
         mlflow.log_param("artifact_root", artifact_uri)
         return run.info.run_id
+
+
+def _run_tags(role: str, tags: Mapping[str, str] | None) -> dict[str, str]:
+    run_tags = {"t2c_clip.role": role}
+    if tags is not None:
+        run_tags.update(tags)
+    return run_tags

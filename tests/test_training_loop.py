@@ -19,6 +19,26 @@ class ProgressRecorder:
         return self.items
 
 
+class TqdmLikeProgressRecorder:
+    def __init__(self):
+        self.items: list[int] = []
+        self.messages: list[str] = []
+        self.postfixes: list[dict[str, str]] = []
+
+    def __call__(self, iterable, **kwargs):
+        self.items = list(iterable)
+        return self
+
+    def __iter__(self):
+        return iter(self.items)
+
+    def set_postfix(self, values):
+        self.postfixes.append(values)
+
+    def write(self, message):
+        self.messages.append(message)
+
+
 class TrainingLoopTest(unittest.TestCase):
     def test_default_interval_validates_every_five_epochs_and_saves_checkpoints(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -71,6 +91,38 @@ class TrainingLoopTest(unittest.TestCase):
     def test_validation_interval_must_be_positive(self):
         with self.assertRaises(ValueError):
             TrainingLoopConfig(total_epochs=1, validation_interval=0)
+
+    def test_validation_metrics_are_reported_to_progress_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            progress = TqdmLikeProgressRecorder()
+            run_training_loop(
+                model=torch.nn.Linear(2, 2),
+                optimizer=None,
+                config=TrainingLoopConfig(total_epochs=1, validation_interval=1, checkpoint_dir=Path(tmp)),
+                train_one_epoch=lambda epoch: None,
+                validate=lambda epoch: ReIDMetrics(map=0.25, cmc={1: 0.5}),
+                progress_factory=progress,
+            )
+
+        self.assertEqual(progress.postfixes, [{"mAP": "0.2500", "best_mAP": "0.2500", "rank1": "0.5000"}])
+        self.assertEqual(progress.messages, ["epoch=1 mAP=0.2500 rank1=0.5000 best_mAP=0.2500 best=True"])
+
+    def test_validation_metrics_are_sent_to_metric_logger(self):
+        logged: list[tuple[int, ReIDMetrics, float | None, bool]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            run_training_loop(
+                model=torch.nn.Linear(2, 2),
+                optimizer=None,
+                config=TrainingLoopConfig(total_epochs=1, validation_interval=1, checkpoint_dir=Path(tmp)),
+                train_one_epoch=lambda epoch: None,
+                validate=lambda epoch: ReIDMetrics(map=0.25, cmc={1: 0.5}),
+                progress_factory=lambda iterable, **kwargs: iterable,
+                metric_logger=lambda epoch, metrics, best_map, is_best: logged.append(
+                    (epoch, metrics, best_map, is_best)
+                ),
+            )
+
+        self.assertEqual(logged, [(1, ReIDMetrics(map=0.25, cmc={1: 0.5}), 0.25, True)])
 
 
 def _metric(epoch: int, validated_epochs: list[int], values: dict[int, float]) -> ReIDMetrics:

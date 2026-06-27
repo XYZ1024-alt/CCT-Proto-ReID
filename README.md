@@ -52,6 +52,7 @@ The evaluator performs standard Image-to-Image ReID scoring without rerank. Same
 - `TrainingLoopConfig(validation_interval=5)` validates mAP every 5 epochs by default.
 - Set `validation_interval` to another positive integer to validate at a different cadence.
 - The loop wraps epochs with `tqdm`.
+- Validation epochs write `mAP`, Rank-1, best mAP, and best-status to the progress output.
 - `last.pth` is saved after every epoch.
 - `best.pth` is saved only when the latest validation mAP is better than the previous best.
 
@@ -127,6 +128,13 @@ wsl --cd /mnt/d/Code/T2C-CLIP /home/xyz10/miniconda3/bin/conda run -n reid pytho
   --experiment-name T2C-CLIP \
   --run-name msmt17-stage2
 ```
+
+When MLflow is enabled, validation logs these metrics at the epoch step:
+
+- `mAP`
+- `best_mAP`
+- `rank_1`, `rank_5`, `rank_10`
+- `is_best`
 
 ## MLflow SQLite Tracking
 

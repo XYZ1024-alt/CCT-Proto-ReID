@@ -21,6 +21,7 @@ DEFAULT_PROGRESS_DESCRIPTION = "training"
 TrainOneEpoch = Callable[[int], Any]
 ValidateEpoch = Callable[[int], ReIDMetrics]
 ProgressFactory = Callable[[Iterable[int]], Iterable[int]]
+MetricLogger = Callable[[int, ReIDMetrics, float | None, bool], None]
 
 
 @dataclass(frozen=True)
@@ -58,15 +59,18 @@ def run_training_loop(
     train_one_epoch: TrainOneEpoch,
     validate: ValidateEpoch,
     progress_factory: ProgressFactory = tqdm,
+    metric_logger: MetricLogger | None = None,
 ) -> TrainingLoopResult:
     config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
     best_map: float | None = None
     history: list[EpochResult] = []
-    for epoch in _progress_epochs(config, progress_factory):
+    progress = _progress_epochs(config, progress_factory)
+    for epoch in progress:
         train_one_epoch(epoch)
         metrics = validate(epoch) if should_validate_epoch(epoch, config.validation_interval) else None
         is_best = _is_best_metric(metrics, best_map)
         best_map = metrics.map if is_best and metrics is not None else best_map
+        _report_metrics(progress, epoch, metrics, best_map, is_best, metric_logger)
         _save_epoch_checkpoints(model, optimizer, config, epoch, metrics, best_map, is_best)
         history.append(EpochResult(epoch, metrics, best_map, is_best))
     return TrainingLoopResult(best_map=best_map, history=tuple(history))
@@ -88,6 +92,59 @@ def _is_best_metric(metrics: ReIDMetrics | None, best_map: float | None) -> bool
     if best_map is None:
         return True
     return metrics.map > best_map
+
+
+def _report_metrics(
+    progress: Iterable[int],
+    epoch: int,
+    metrics: ReIDMetrics | None,
+    best_map: float | None,
+    is_best: bool,
+    metric_logger: MetricLogger | None,
+) -> None:
+    if metrics is None:
+        return
+    _write_progress_metrics(progress, epoch, metrics, best_map, is_best)
+    if metric_logger is not None:
+        metric_logger(epoch, metrics, best_map, is_best)
+
+
+def _write_progress_metrics(
+    progress: Iterable[int],
+    epoch: int,
+    metrics: ReIDMetrics,
+    best_map: float | None,
+    is_best: bool,
+) -> None:
+    values = _metric_strings(metrics, best_map)
+    set_postfix = getattr(progress, "set_postfix", None)
+    write = getattr(progress, "write", None)
+    if callable(set_postfix):
+        set_postfix(values)
+    if callable(write):
+        write(f"epoch={epoch} {_metric_message(values)} best={is_best}")
+
+
+def _metric_strings(metrics: ReIDMetrics, best_map: float | None) -> dict[str, str]:
+    values = {"mAP": _format_metric(metrics.map), "best_mAP": _format_optional_metric(best_map)}
+    if 1 in metrics.cmc:
+        values["rank1"] = _format_metric(metrics.cmc[1])
+    return values
+
+
+def _metric_message(values: dict[str, str]) -> str:
+    keys = ("mAP", "rank1", "best_mAP")
+    return " ".join(f"{key}={values[key]}" for key in keys if key in values)
+
+
+def _format_optional_metric(value: float | None) -> str:
+    if value is None:
+        return "nan"
+    return _format_metric(value)
+
+
+def _format_metric(value: float) -> str:
+    return f"{value:.4f}"
 
 
 def _save_epoch_checkpoints(

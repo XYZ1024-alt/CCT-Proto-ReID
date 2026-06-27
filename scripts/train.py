@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Iterable
+from contextlib import nullcontext
 from dataclasses import dataclass
 import importlib
 from pathlib import Path
@@ -12,8 +13,8 @@ from typing import Sequence
 import torch
 
 from t2c_clip.evaluation import ReIDMetrics
-from t2c_clip.loops import TrainingLoopConfig, run_training_loop
-from t2c_clip.mlflow import MLflowSQLiteConfig, initialize_mlflow_sqlite
+from t2c_clip.loops import MetricLogger, TrainingLoopConfig, run_training_loop
+from t2c_clip.mlflow import MLflowSQLiteConfig, log_reid_metrics_to_mlflow, start_mlflow_sqlite_run
 
 DEFAULT_TOTAL_EPOCHS = 120
 DEFAULT_VALIDATION_INTERVAL = 5
@@ -50,14 +51,14 @@ class TrainingJob:
 
 def main(argv: Sequence[str] | None = None, progress_factory: ProgressFactory | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    _initialize_mlflow_if_requested(args)
-    job = _load_job_builder(args.job_builder)(args)
-    config = TrainingLoopConfig(
-        total_epochs=args.epochs,
-        validation_interval=args.validation_interval,
-        checkpoint_dir=args.checkpoint_dir,
-    )
-    _run_loop(job, config, progress_factory)
+    with _mlflow_context_if_requested(args):
+        job = _load_job_builder(args.job_builder)(args)
+        config = TrainingLoopConfig(
+            total_epochs=args.epochs,
+            validation_interval=args.validation_interval,
+            checkpoint_dir=args.checkpoint_dir,
+        )
+        _run_loop(job, config, progress_factory, _metric_logger_if_requested(args))
     return 0
 
 
@@ -91,22 +92,37 @@ def _add_project_training_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--tfc-weight", type=float, default=DEFAULT_TFC_WEIGHT)
 
 
-def _initialize_mlflow_if_requested(args: argparse.Namespace) -> None:
+def _mlflow_context_if_requested(args: argparse.Namespace):
     if not args.enable_mlflow:
-        return
+        return nullcontext()
     config = MLflowSQLiteConfig(args.tracking_db, args.artifact_root, args.experiment_name)
-    initialize_mlflow_sqlite(config, run_name=args.run_name)
+    return start_mlflow_sqlite_run(config, run_name=args.run_name)
+
+
+def _metric_logger_if_requested(args: argparse.Namespace) -> MetricLogger | None:
+    if not args.enable_mlflow:
+        return None
+    return log_reid_metrics_to_mlflow
 
 
 def _run_loop(
     job: TrainingJob,
     config: TrainingLoopConfig,
     progress_factory: ProgressFactory | None,
+    metric_logger: MetricLogger | None,
 ) -> None:
     if progress_factory is None:
-        run_training_loop(job.model, job.optimizer, config, job.train_one_epoch, job.validate)
+        run_training_loop(job.model, job.optimizer, config, job.train_one_epoch, job.validate, metric_logger=metric_logger)
         return
-    run_training_loop(job.model, job.optimizer, config, job.train_one_epoch, job.validate, progress_factory)
+    run_training_loop(
+        job.model,
+        job.optimizer,
+        config,
+        job.train_one_epoch,
+        job.validate,
+        progress_factory,
+        metric_logger=metric_logger,
+    )
 
 
 def _load_job_builder(spec: str) -> JobBuilder:
