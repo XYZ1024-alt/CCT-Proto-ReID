@@ -31,7 +31,7 @@ from typing import Any
 import torch
 from torch.utils.data import DataLoader
 
-from scripts.train import TrainingJob, TwoStageTrainingJob
+from scripts.train import StageMetadata, TrainingJob, TwoStageTrainingJob
 from t2c_clip.clip_backbone import (
     TransformersCLIPImageEncoder,
     TransformersCLIPTextEncoder,
@@ -323,19 +323,36 @@ def _build_optimizer(model: torch.nn.Module, config: CLIPReIDJobConfig) -> torch
     return torch.optim.AdamW(parameters, lr=config.lr)
 
 
-def _stage_metadata(config: CLIPReIDJobConfig) -> dict[str, Any]:
-    return {
-        "stage1_epochs": config.stage1_epochs,
-        "stage2_epochs": config.stage2_epochs,
-        "validation_interval": config.validation_interval,
-        "freeze_image_encoder_stage1": config.freeze_image_encoder_stage1,
-        "freeze_image_encoder_stage2": config.freeze_image_encoder_stage2,
-        "freeze_text_encoder": config.freeze_text_encoder,
-        "clip_weight": config.clip_weight,
-        "tfc_weight": config.tfc_weight,
-        "beta": config.beta,
-        "retrieval_mode": config.retrieval_mode,
-    }
+def _stage_metadata(config: CLIPReIDJobConfig) -> StageMetadata:
+    """Bundle two-stage config into the canonical ``StageMetadata`` container.
+
+    Returning a ``StageMetadata`` (rather than a raw dict) keeps
+    ``TwoStageTrainingJob.stage_metadata`` typing consistent and stops
+    ``train.py`` from mistaking ``dict.values`` (a bound method) for a
+    mapping when it logs stage params to MLflow.
+    """
+    return StageMetadata(
+        values={
+            "dataset": config.dataset,
+            "clip_model_name": config.clip_model_name,
+            "stage1_epochs": config.stage1_epochs,
+            "stage2_epochs": config.stage2_epochs,
+            "validation_interval": config.validation_interval,
+            "batch_size": config.batch_size,
+            "num_workers": config.num_workers,
+            "lr": config.lr,
+            "beta": config.beta,
+            "clip_weight": config.clip_weight,
+            "tfc_weight": config.tfc_weight,
+            "triplet_margin": config.triplet_margin,
+            "tfc_momentum": config.tfc_momentum,
+            "context_length": config.context_length,
+            "freeze_image_encoder_stage1": config.freeze_image_encoder_stage1,
+            "freeze_image_encoder_stage2": config.freeze_image_encoder_stage2,
+            "freeze_text_encoder": config.freeze_text_encoder,
+            "retrieval_mode": config.retrieval_mode,
+        }
+    )
 
 
 def _load_split_samples(config: JobDataConfig) -> SplitSamples:

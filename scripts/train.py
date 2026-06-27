@@ -11,7 +11,7 @@ Stage-2 metrics.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 import importlib
@@ -114,6 +114,26 @@ def _is_two_stage_job(job: Any) -> bool:
     return hasattr(job, "stage1") and hasattr(job, "stage2") and not hasattr(job, "model")
 
 
+def _stage_metadata_values(metadata: Any) -> dict[str, Any]:
+    """Extract the metadata dict from either a ``StageMetadata`` wrapper or a raw dict.
+
+    Job builders historically returned either a ``StageMetadata`` (with a
+    ``.values`` dict attribute) or a raw ``dict`` (whose ``.values`` is the
+    ``dict.values`` method, not the values themselves). Normalize both shapes
+    so the MLflow logger always receives a mapping and never a bound method.
+    """
+    if isinstance(metadata, Mapping):
+        return dict(metadata)
+    values = getattr(metadata, "values", None)
+    if isinstance(values, Mapping):
+        return dict(values)
+    if values is None:
+        return {}
+    raise TypeError(
+        f"stage_metadata.values is neither a mapping nor None: {type(values).__name__}"
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a T2C-CLIP training job.")
     parser.add_argument("--job-builder", required=True)
@@ -171,7 +191,7 @@ def _mlflow_context_if_requested(args: argparse.Namespace):
 
 def _run_two_stage_loop(job: TwoStageTrainingJob, args: argparse.Namespace, progress_factory: ProgressFactory | None) -> None:
     if args.enable_mlflow and job.stage_metadata is not None:
-        log_stage_params_to_mlflow(job.stage_metadata.values)
+        log_stage_params_to_mlflow(_stage_metadata_values(job.stage_metadata))
     stage1_loggers = _stage_metric_loggers_for("stage1", args)
     stage2_loggers = _stage_metric_loggers_for("stage2", args)
     stage1_config = TrainingLoopConfig(
