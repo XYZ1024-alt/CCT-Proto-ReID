@@ -36,6 +36,7 @@ from t2c_clip.mlflow import (
     make_stage_metric_loggers,
     start_mlflow_sqlite_run,
 )
+from t2c_clip.retrieval import SUPPORTED_RETRIEVAL_MODES
 
 DEFAULT_TOTAL_EPOCHS = 120
 DEFAULT_VALIDATION_INTERVAL = 5
@@ -58,7 +59,6 @@ DEFAULT_TFC_WEIGHT = 1.0
 DEFAULT_CLIP_WEIGHT = 0.1
 DEFAULT_RETRIEVAL_MODE = "fused"
 SUPPORTED_DATASETS = ("market1501", "msmt17")
-SUPPORTED_RETRIEVAL_MODES = ("fused", "image_only")
 
 TrainOneEpoch = Callable[[int, TrainingEpochReporter], dict[str, float] | None]
 ValidateEpoch = Callable[[int], ReIDMetrics]

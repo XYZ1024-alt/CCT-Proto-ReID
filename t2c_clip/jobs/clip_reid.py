@@ -51,6 +51,7 @@ from t2c_clip.datasets import (
 from t2c_clip.evaluation import ReIDMetrics, evaluate_reid
 from t2c_clip.model import T2CClipModel
 from t2c_clip.prompts import PromptBank, PromptConfig
+from t2c_clip.retrieval import require_retrieval_mode
 from t2c_clip.tfc import TFCCenterBank
 from t2c_clip.training import (
     Stage1LossBreakdown,
@@ -150,6 +151,7 @@ class ValidationRuntime:
     model: "CLIPReIDTrainingModel"
     loaders: LoaderBundle
     device: torch.device
+    retrieval_mode: str
 
 
 class CLIPReIDTrainingModel(torch.nn.Module):
@@ -182,7 +184,7 @@ def build_training_job(
         model=shared_model,
         optimizer=optimizer_stage2,
         train_one_epoch=_train_one_epoch(stage2_runtime),
-        validate=_validate(ValidationRuntime(shared_model, loaders, config.device)),
+        validate=_validate(ValidationRuntime(shared_model, loaders, config.device, config.retrieval_mode)),
     )
     if config.stage1_epochs <= 0:
         return stage2_job
@@ -256,7 +258,7 @@ def _job_config_from_args(args: Any) -> CLIPReIDJobConfig:
         freeze_image_encoder_stage1=bool(getattr(args, "freeze_image_encoder_stage1", True)),
         freeze_image_encoder_stage2=bool(getattr(args, "freeze_image_encoder_stage2", True)),
         freeze_text_encoder=bool(getattr(args, "freeze_text_encoder", True)),
-        retrieval_mode=str(getattr(args, "retrieval_mode", "fused")),
+        retrieval_mode=require_retrieval_mode(str(getattr(args, "retrieval_mode", "fused"))),
     )
 
 
@@ -486,8 +488,18 @@ def _noop_validate():
 def _validate(runtime: ValidationRuntime):
     def validate(epoch: int) -> ReIDMetrics:
         runtime.model.eval()
-        query = _extract_features(runtime.model.retrieval_model, runtime.loaders.query, runtime.device)
-        gallery = _extract_features(runtime.model.retrieval_model, runtime.loaders.gallery, runtime.device)
+        query = _extract_features(
+            runtime.model.retrieval_model,
+            runtime.loaders.query,
+            runtime.device,
+            runtime.retrieval_mode,
+        )
+        gallery = _extract_features(
+            runtime.model.retrieval_model,
+            runtime.loaders.gallery,
+            runtime.device,
+            runtime.retrieval_mode,
+        )
         return evaluate_reid(
             query.features,
             gallery.features,
@@ -508,7 +520,12 @@ class FeatureSet:
     camera_ids: tuple[int, ...]
 
 
-def _extract_features(model: T2CClipModel, loader: DataLoader, device: torch.device) -> FeatureSet:
+def _extract_features(
+    model: T2CClipModel,
+    loader: DataLoader,
+    device: torch.device,
+    retrieval_mode: str,
+) -> FeatureSet:
     feature_parts: list[torch.Tensor] = []
     person_ids: list[int] = []
     camera_ids: list[int] = []
@@ -516,7 +533,8 @@ def _extract_features(model: T2CClipModel, loader: DataLoader, device: torch.dev
         for batch in loader:
             images = batch.images.to(device)
             cameras = batch.camera_ids.to(device)
-            feature_parts.append(model.encode_retrieval(images, cameras).cpu())
+            features = model.encode_retrieval(images, cameras, retrieval_mode=retrieval_mode)
+            feature_parts.append(features.cpu())
             person_ids.extend(batch.original_person_ids)
             camera_ids.extend(batch.original_camera_ids)
     if not feature_parts:
