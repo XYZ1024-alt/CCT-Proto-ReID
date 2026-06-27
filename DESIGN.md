@@ -192,10 +192,13 @@ Stage-1 不计算 ReID classifier、triplet、TFC。
 
 ### 7.2 Stage-2 前向
 
+Stage-2 computes two text features:
+
 ```text
 f_v = normalize(CLIP_ImageEncoder(image))
 f_t_train = normalize(CLIP_TextEncoder(P_global + P_cam[c] + P_id[y]))
-f_train = normalize(f_v + beta * f_t_train)
+f_t_eval  = normalize(CLIP_TextEncoder(P_global + P_cam[c]))
+f_reid    = normalize(f_v + beta * f_t_eval)
 ```
 
 输出：
@@ -204,11 +207,14 @@ f_train = normalize(f_v + beta * f_t_train)
 {
   "visual": f_v,
   "text": f_t_train,
-  "retrieval": f_train
+  "retrieval": f_reid
 }
 ```
 
-Stage-2 使用融合特征训练 ReID 目标。`P_id` 只用于训练期。
+`L_id`, `L_triplet`, and `L_TFC` act on `f_reid`, so the training target
+matches the validation and inference feature. `f_t_train` is used only for
+the auxiliary CLIP alignment loss, which prevents identity prompts from
+becoming a training-time shortcut that disappears during validation.
 
 ### 7.3 推理/验证前向
 
@@ -310,19 +316,19 @@ L_clip_dual = (loss_i2t + loss_t2i) / 2
 
 ### 9.2 Identity Classification Loss
 
-使用融合特征：
+使用推理一致的检索特征：
 
 ```text
-logits = classifier(f_train)
+logits = classifier(f_reid)
 L_id = CE(logits, train_person_id)
 ```
 
 ### 9.3 Batch-Hard Triplet Loss
 
-使用融合特征：
+使用推理一致的检索特征：
 
 ```text
-L_triplet = batch_hard_triplet_loss(f_train, train_person_id)
+L_triplet = batch_hard_triplet_loss(f_reid, train_person_id)
 ```
 
 训练 batch 必须 identity-balanced，至少包含有效 positive 和 negative pair。
@@ -332,13 +338,13 @@ L_triplet = batch_hard_triplet_loss(f_train, train_person_id)
 TFC 维护训练身份的 EMA center：
 
 ```text
-center_y <- momentum * center_y + (1 - momentum) * mean(f_train | y)
+center_y <- momentum * center_y + (1 - momentum) * mean(f_reid | y)
 ```
 
 损失：
 
 ```text
-L_TFC = mean(1 - cosine(f_train_i, stopgrad(center_yi)))
+L_TFC = mean(1 - cosine(f_reid_i, stopgrad(center_yi)))
 ```
 
 TFC 只用于训练，不参与推理和验证。
@@ -499,6 +505,10 @@ stage1_last.pth
 ## 13. Sanity Check
 
 完整训练前必须先跑短程 sanity check：
+
+`--retrieval-mode image_only` must skip the text branch and evaluate
+`normalize(f_v)` directly. This result is the CLIP image-only baseline sanity
+check and must be above the random floor before long Stage-2 training.
 
 1. image-only CLIP baseline mAP 高于随机水平。
 2. Stage-1 `clip_loss` 明显低于 `ln(batch_size)`。

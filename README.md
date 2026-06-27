@@ -12,10 +12,13 @@ codebase trains a real CLIP dual-stream model with a two-stage pipeline:
 - Real CLIP text encoder injection through `TransformersCLIPTextEncoder`.
 - Stage-1 prompt alignment: `f_v` vs training-ID prompt text feature
   `f_t_id` via bidirectional image-text contrastive loss.
-- Stage-2 ReID training: `f = normalize(f_v + beta * f_t_train)` with
-  `L_total = L_id + L_triplet + clip_weight * L_clip_dual + tfc_weight * L_TFC`.
+- Stage-2 ReID training: classifier, triplet, and TFC losses act on
+  `f_eval = normalize(f_v + beta * f_t_eval)`, where `f_t_eval` uses only
+  global + camera prompts. The identity-aware text feature is used only by
+  the auxiliary CLIP alignment loss.
 - Inference: `f_eval = normalize(f_v + beta * f_t_eval)` with only
-  `global + camera` prompts — query/gallery never use identity prompts.
+  global + camera prompts. `--retrieval-mode image_only` evaluates normalized
+  image features without the text branch.
 - Training-time Feature Centralization (TFC) EMA centers act on the
   fused retrieval feature during Stage-2 only.
 - tqdm-based training loop scheduling with configurable mAP validation
@@ -133,7 +136,7 @@ Useful training arguments:
 - `--triplet-margin 0.3`
 - `--tfc-weight 1.0`
 - `--clip-weight 0.1`
-- `--retrieval-mode fused|image_only`
+- `--retrieval-mode fused|image_only` (`fused` validates global + camera prompt fusion; `image_only` validates normalized CLIP image features)
 - `--freeze-image-encoder-stage1 / --no-freeze-image-encoder-stage1` (default frozen)
 - `--freeze-image-encoder-stage2 / --no-freeze-image-encoder-stage2` (default frozen)
 - `--freeze-text-encoder / --no-freeze-text-encoder` (default frozen — CoOp/CLIP-ReID-style prompt tuning)

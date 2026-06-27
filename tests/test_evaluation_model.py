@@ -5,6 +5,7 @@ import torch
 from t2c_clip.evaluation import evaluate_reid
 from t2c_clip.model import T2CClipModel
 from t2c_clip.prompts import PromptBank, PromptConfig
+from t2c_clip.retrieval import IMAGE_ONLY_RETRIEVAL
 
 
 class IdentityEncoder(torch.nn.Module):
@@ -44,3 +45,37 @@ class EvaluationModelTest(unittest.TestCase):
 
         expected = torch.tensor([[2 ** -0.5, 2 ** -0.5]])
         self.assertTrue(torch.allclose(output, expected))
+
+    def test_encode_retrieval_image_only_returns_visual_feature(self):
+        prompt_bank = PromptBank(PromptConfig(num_cameras=1, num_train_ids=1, context_length=1, embedding_dim=2))
+        with torch.no_grad():
+            prompt_bank.global_prompt.zero_()
+            prompt_bank.camera_prompts[0] = torch.tensor([[0.0, 1.0]])
+            prompt_bank.identity_prompts[0] = torch.tensor([[10.0, 0.0]])
+        model = T2CClipModel(IdentityEncoder(), PromptMeanEncoder(), prompt_bank, beta=1.0)
+
+        output = model.encode_retrieval(
+            torch.tensor([[1.0, 0.0]]),
+            torch.tensor([0]),
+            retrieval_mode=IMAGE_ONLY_RETRIEVAL,
+        )
+
+        expected = torch.tensor([[1.0, 0.0]])
+        self.assertTrue(torch.allclose(output, expected))
+
+    def test_stage2_reid_feature_matches_inference_feature_without_identity_prompt(self):
+        prompt_bank = PromptBank(PromptConfig(num_cameras=1, num_train_ids=1, context_length=1, embedding_dim=2))
+        with torch.no_grad():
+            prompt_bank.global_prompt.zero_()
+            prompt_bank.camera_prompts[0] = torch.tensor([[0.0, 1.0]])
+            prompt_bank.identity_prompts[0] = torch.tensor([[10.0, 0.0]])
+        model = T2CClipModel(IdentityEncoder(), PromptMeanEncoder(), prompt_bank, beta=1.0)
+        images = torch.tensor([[1.0, 0.0]])
+        camera_ids = torch.tensor([0])
+        person_ids = torch.tensor([0])
+
+        outputs = model.forward_stage2(images, camera_ids, person_ids)
+        inference = model.encode_retrieval(images, camera_ids)
+
+        self.assertTrue(torch.allclose(outputs["retrieval"], inference))
+        self.assertFalse(torch.allclose(outputs["text"], inference))

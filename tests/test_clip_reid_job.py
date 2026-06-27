@@ -6,12 +6,15 @@ import unittest
 from PIL import Image
 import torch
 
+from t2c_clip.datasets import ReIDImageBatch
 from t2c_clip.jobs.clip_reid import (
     CLIPLoadResult,
     JobDataConfig,
+    _extract_features,
     build_training_job,
     load_dataset_bundle,
 )
+from t2c_clip.retrieval import IMAGE_ONLY_RETRIEVAL
 from tests._clip_fakes import FakeCLIP, ImageAwareFakeImageProcessor
 
 
@@ -58,9 +61,61 @@ class CLIPReIDJobTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 build_training_job(_training_args(root), clip_loader=_load_fake_clip)
 
+    def test_extract_features_passes_configured_retrieval_mode(self):
+        model = RetrievalModeRecorder()
+        batch = ReIDImageBatch(
+            images=torch.ones(2, 3, 2, 2),
+            person_ids=torch.tensor([0, 1]),
+            camera_ids=torch.tensor([1, 2]),
+            original_person_ids=(10, 20),
+            original_camera_ids=(1, 2),
+        )
+
+        features = _extract_features(
+            model,
+            [batch],
+            torch.device("cpu"),
+            retrieval_mode=IMAGE_ONLY_RETRIEVAL,
+        )
+
+        self.assertEqual(model.retrieval_modes, [IMAGE_ONLY_RETRIEVAL])
+        self.assertEqual(features.person_ids, (10, 20))
+        self.assertEqual(features.camera_ids, (1, 2))
+        self.assertEqual(tuple(features.features.shape), (2, 4))
+
+    def test_no_freeze_image_encoder_stage2_reenables_encoder_after_stage1_freeze(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _build_market_fixture(Path(tmp))
+            args = _training_args(root)
+            args.stage1_epochs = 1
+            args.freeze_image_encoder_stage1 = True
+            args.freeze_image_encoder_stage2 = False
+
+            job = build_training_job(args, clip_loader=_load_fake_clip)
+
+        clip_model = job.stage2.model.retrieval_model.image_encoder.clip_model
+        self.assertGreater(_trainable_parameter_count(clip_model.visual_projection), 0)
+
+    def test_no_freeze_image_encoder_stage2_works_without_stage1_epochs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _build_market_fixture(Path(tmp))
+            args = _training_args(root)
+            args.stage1_epochs = 0
+            args.freeze_image_encoder_stage1 = True
+            args.freeze_image_encoder_stage2 = False
+
+            job = build_training_job(args, clip_loader=_load_fake_clip)
+
+        clip_model = job.model.retrieval_model.image_encoder.clip_model
+        self.assertGreater(_trainable_parameter_count(clip_model.visual_projection), 0)
+
 
 def _load_fake_clip(model_name: str) -> CLIPLoadResult:
     return CLIPLoadResult(FakeCLIP(hidden_size=8, projection_dim=4), ImageAwareFakeImageProcessor(), tokenizer=None)
+
+
+def _trainable_parameter_count(module: torch.nn.Module) -> int:
+    return sum(parameter.numel() for parameter in module.parameters() if parameter.requires_grad)
 
 
 class TrainBatchReporterRecorder:
@@ -72,6 +127,21 @@ class TrainBatchReporterRecorder:
 
     def report_batch(self, metrics):
         self.batch_reports.append(dict(metrics))
+
+
+class RetrievalModeRecorder(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.retrieval_modes: list[str] = []
+
+    def encode_retrieval(
+        self,
+        images: torch.Tensor,
+        camera_ids: torch.Tensor,
+        retrieval_mode: str = "fused",
+    ) -> torch.Tensor:
+        self.retrieval_modes.append(retrieval_mode)
+        return torch.ones(images.shape[0], 4)
 
 
 def _training_args(root: Path) -> Namespace:
