@@ -2,17 +2,11 @@
 
 The model has three explicit forward paths:
 
-- :meth:`T2CClipModel.forward_stage1` — Stage-1 prompt alignment. Only the
-  CLIP image feature and the training identity prompt's text feature are
-  returned; no ReID/TFC gradients flow here.
-- :meth:`T2CClipModel.forward_stage2` — Stage-2 ReID training. Build the
-  retrieval feature ``f = normalize(f_v + beta * f_t_train)`` using training
-  prompts (global + camera + identity).
-- :meth:`T2CClipModel.encode_retrieval` — Inference / validation. Build the
-  retrieval feature ``f = normalize(f_v + beta * f_t_eval)`` using inference
-  prompts (global + camera) only.
-
-Identity prompts are never used in :meth:`encode_retrieval`.
+- ``forward_stage1``: prompt alignment with identity-aware training text.
+- ``forward_stage2``: ReID training. ReID losses use the same retrieval
+  feature as inference; identity-aware text is kept for CLIP alignment only.
+- ``encode_retrieval``: validation and inference retrieval with either fused
+  global + camera prompts or image-only features.
 """
 
 from __future__ import annotations
@@ -21,6 +15,7 @@ import torch
 
 from t2c_clip.features import fuse_features, l2_normalize
 from t2c_clip.prompts import PromptBank
+from t2c_clip.retrieval import FUSED_RETRIEVAL, IMAGE_ONLY_RETRIEVAL, require_retrieval_mode
 
 
 class T2CClipModel(torch.nn.Module):
@@ -37,19 +32,31 @@ class T2CClipModel(torch.nn.Module):
         self.prompt_bank = prompt_bank
         self.beta = float(beta)
 
-    def encode_retrieval(self, images: torch.Tensor, camera_ids: torch.Tensor) -> torch.Tensor:
-        """Inference / validation retrieval feature.
-
-        Uses ``global + camera`` prompts only — never identity prompts.
-        """
+    def encode_retrieval(
+        self,
+        images: torch.Tensor,
+        camera_ids: torch.Tensor,
+        retrieval_mode: str = FUSED_RETRIEVAL,
+    ) -> torch.Tensor:
+        """Inference / validation retrieval feature."""
         visual = self.encode_visual(images)
-        prompts = self.prompt_bank.inference_prompts(camera_ids)
-        text = self.encode_text(prompts)
+        mode = require_retrieval_mode(retrieval_mode)
+        if mode == IMAGE_ONLY_RETRIEVAL:
+            return visual
+        text = self.encode_inference_text(camera_ids)
         return fuse_features(visual, text, self.beta)
 
     def encode_visual(self, images: torch.Tensor) -> torch.Tensor:
         image_features = self.image_encoder(images)
         return l2_normalize(image_features)
+
+    def encode_inference_text(self, camera_ids: torch.Tensor) -> torch.Tensor:
+        prompts = self.prompt_bank.inference_prompts(camera_ids)
+        return self.encode_text(prompts)
+
+    def encode_training_text(self, camera_ids: torch.Tensor, person_ids: torch.Tensor) -> torch.Tensor:
+        prompts = self.prompt_bank.training_prompts(camera_ids, person_ids)
+        return self.encode_text(prompts)
 
     def forward_stage1(
         self,
@@ -57,14 +64,9 @@ class T2CClipModel(torch.nn.Module):
         camera_ids: torch.Tensor,
         person_ids: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        """Stage-1 prompt alignment forward.
-
-        Returns normalized visual and identity-aware text features. Stage-1
-        computes no ReID/Triplet/TFC; those are Stage-2 only.
-        """
+        """Stage-1 prompt alignment forward."""
         visual = self.encode_visual(images)
-        prompts = self.prompt_bank.training_prompts(camera_ids, person_ids)
-        text = self.encode_text(prompts)
+        text = self.encode_training_text(camera_ids, person_ids)
         return {"visual": visual, "text": text}
 
     def forward_stage2(
@@ -73,16 +75,11 @@ class T2CClipModel(torch.nn.Module):
         camera_ids: torch.Tensor,
         person_ids: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        """Stage-2 ReID training forward.
-
-        Uses training prompts (global + camera + identity). The retrieval
-        feature ``f = normalize(f_v + beta * f_t_train)`` is what classifier,
-        triplet, and TFC losses act on.
-        """
+        """Stage-2 ReID training forward."""
         visual = self.encode_visual(images)
-        prompts = self.prompt_bank.training_prompts(camera_ids, person_ids)
-        text = self.encode_text(prompts)
-        retrieval = fuse_features(visual, text, self.beta)
+        text = self.encode_training_text(camera_ids, person_ids)
+        retrieval_text = self.encode_inference_text(camera_ids)
+        retrieval = fuse_features(visual, retrieval_text, self.beta)
         return {"visual": visual, "text": text, "retrieval": retrieval}
 
     def forward_training(
@@ -95,13 +92,6 @@ class T2CClipModel(torch.nn.Module):
         return self.forward_stage2(images, camera_ids, person_ids)
 
     def encode_text(self, prompts: torch.Tensor) -> torch.Tensor:
-        """Encode prompts through the real CLIP text branch.
-
-        ``prompts`` is [batch, context_length, hidden_dim] where ``hidden_dim``
-        is the CLIP text token embedding dimension. The text encoder injects
-        the prompts into fixed context slots and runs the CLIP text
-        transformer + ``text_projection``, returning L2-normalized text
-        features in the shared projection space.
-        """
+        """Encode prompt embeddings through the configured text encoder."""
         text_features = self.text_encoder(prompts)
         return l2_normalize(text_features)
