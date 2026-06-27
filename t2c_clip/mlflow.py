@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 import mlflow
 from mlflow.tracking import MlflowClient
@@ -19,6 +19,7 @@ DEFAULT_EXPERIMENT_NAME = "T2C-CLIP"
 DEFAULT_INIT_RUN_NAME = "mlflow-sqlite-init"
 DEFAULT_MLFLOW_UI_HOST = "127.0.0.1"
 DEFAULT_MLFLOW_UI_PORT = 6006
+TRAIN_STAGES = ("stage1", "stage2")
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,47 @@ def log_training_metrics_to_mlflow(epoch: int, metrics: Mapping[str, float]) -> 
 def log_training_step_metrics_to_mlflow(train_step: int, metrics: Mapping[str, float]) -> None:
     for name, value in metrics.items():
         mlflow.log_metric(_training_step_metric_name(name), float(value), step=train_step)
+
+
+def make_stage_metric_loggers(stage: str) -> tuple["TrainMetricLogger", "TrainStepMetricLogger"]:
+    """Build stage-aware epoch/step MLflow loggers.
+
+    ``stage`` must be one of :data:`TRAIN_STAGES` (``"stage1"`` or
+    ``"stage2"``). The returned loggers prefix each metric with
+    ``{stage}_train_`` / ``{stage}_train_step_`` so MLflow histories are
+    disambiguated across the two training phases.
+    """
+    if stage not in TRAIN_STAGES:
+        raise ValueError(f"unknown training stage: {stage!r}; expected one of {TRAIN_STAGES}")
+
+    def epoch_logger(epoch: int, metrics: Mapping[str, float]) -> None:
+        for name, value in metrics.items():
+            mlflow.log_metric(f"{stage}_{_training_metric_name(name)}", float(value), step=epoch)
+
+    def step_logger(train_step: int, metrics: Mapping[str, float]) -> None:
+        for name, value in metrics.items():
+            mlflow.log_metric(f"{stage}_{_training_step_metric_name(name)}", float(value), step=train_step)
+
+    return epoch_logger, step_logger
+
+
+def log_stage_params_to_mlflow(metadata: Mapping[str, Any]) -> None:
+    """Record the two-stage training configuration as MLflow params/tags."""
+    mlflow.set_tag("t2c_clip.retrieval_mode", str(metadata.get("retrieval_mode", "fused")))
+    for key in (
+        "stage1_epochs",
+        "stage2_epochs",
+        "validation_interval",
+        "freeze_image_encoder_stage1",
+        "freeze_image_encoder_stage2",
+        "freeze_text_encoder",
+        "clip_weight",
+        "tfc_weight",
+        "beta",
+        "retrieval_mode",
+    ):
+        if key in metadata:
+            mlflow.log_param(key, metadata[key])
 
 
 def mlflow_ui_command(

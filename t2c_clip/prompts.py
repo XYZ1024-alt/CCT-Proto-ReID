@@ -1,4 +1,17 @@
-"""Learnable prompt composition for T2C-CLIP."""
+"""Learnable prompt composition for T2C-CLIP.
+
+The ``embedding_dim`` of the prompt bank must equal the CLIP text model
+**token embedding dimension** (``text_model.embeddings.token_embedding``'s
+hidden dimension), not the CLIP shared projection dimension. The job
+builder obtains this dimension from :func:`t2c_clip.clip_backbone.clip_text_hidden_dim`.
+Each prompt parameter lives in token-embedding space and is injected by
+:class:`~t2c_clip.clip_backbone.TransformersCLIPTextEncoder` into fixed
+context slots between the SOT and EOS tokens.
+
+Training-time prompts combine ``global + camera + identity`` prompts.
+Inference-time prompts combine ``global + camera`` prompts only —
+identity prompts are excluded from query/gallery retrieval.
+"""
 
 from __future__ import annotations
 

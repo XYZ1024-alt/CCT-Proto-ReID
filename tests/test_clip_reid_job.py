@@ -12,6 +12,7 @@ from t2c_clip.jobs.clip_reid import (
     build_training_job,
     load_dataset_bundle,
 )
+from tests._clip_fakes import FakeCLIP, ImageAwareFakeImageProcessor
 
 
 class CLIPReIDJobTest(unittest.TestCase):
@@ -19,7 +20,7 @@ class CLIPReIDJobTest(unittest.TestCase):
         config = JobDataConfig("market1501", Path("missing"))
 
         with self.assertRaises(FileNotFoundError):
-            load_dataset_bundle(config, FakeImageProcessor())
+            load_dataset_bundle(config, ImageAwareFakeImageProcessor())
 
     def test_build_training_job_returns_real_callbacks_with_fake_clip(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -40,6 +41,16 @@ class CLIPReIDJobTest(unittest.TestCase):
         self.assertGreaterEqual(metrics.map, 0.0)
         self.assertIn(1, metrics.cmc)
 
+    def test_build_training_job_returns_two_stage_job_when_stage1_epochs_positive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _build_market_fixture(Path(tmp))
+            args = _training_args(root)
+            args.stage1_epochs = 1
+            job = build_training_job(args, clip_loader=_load_fake_clip)
+
+        from scripts.train import TwoStageTrainingJob
+        self.assertIsInstance(job, TwoStageTrainingJob)
+
     def test_build_training_job_rejects_training_split_without_positive_pairs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = _build_market_fixture_without_positive_pairs(Path(tmp))
@@ -48,26 +59,8 @@ class CLIPReIDJobTest(unittest.TestCase):
                 build_training_job(_training_args(root), clip_loader=_load_fake_clip)
 
 
-class FakeCLIP(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.config = Namespace(projection_dim=2)
-        self.scale = torch.nn.Parameter(torch.tensor(1.0))
-
-    def get_image_features(self, pixel_values):
-        pooled = pixel_values.mean(dim=(2, 3))[:, :2]
-        return pooled * self.scale
-
-
-class FakeImageProcessor:
-    def __call__(self, images, return_tensors):
-        pixel = torch.tensor(images.getpixel((0, 0)), dtype=torch.float32) / 255.0
-        values = pixel.view(1, 3, 1, 1).expand(1, 3, 2, 2)
-        return {"pixel_values": values}
-
-
 def _load_fake_clip(model_name: str) -> CLIPLoadResult:
-    return CLIPLoadResult(FakeCLIP(), FakeImageProcessor())
+    return CLIPLoadResult(FakeCLIP(hidden_size=8, projection_dim=4), ImageAwareFakeImageProcessor(), tokenizer=None)
 
 
 class TrainBatchReporterRecorder:
@@ -95,6 +88,14 @@ def _training_args(root: Path) -> Namespace:
         tfc_momentum=0.5,
         triplet_margin=0.3,
         tfc_weight=1.0,
+        clip_weight=0.1,
+        stage1_epochs=0,
+        epochs=1,
+        validation_interval=1,
+        freeze_image_encoder_stage1=True,
+        freeze_image_encoder_stage2=True,
+        freeze_text_encoder=True,
+        retrieval_mode="fused",
     )
 
 

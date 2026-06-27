@@ -16,7 +16,8 @@ DEFAULT_VALIDATION_INTERVAL = 5
 DEFAULT_CHECKPOINT_DIR = Path("checkpoints")
 BEST_CHECKPOINT_NAME = "best.pth"
 LAST_CHECKPOINT_NAME = "last.pth"
-DEFAULT_PROGRESS_DESCRIPTION = "training"
+DEFAULT_PROGRESS_DESCRIPTION = ""
+STAGE2 = "stage2"
 VALIDATION_METRIC_KEYS = ("mAP", "best_mAP")
 
 TrainMetrics = Mapping[str, float]
@@ -35,11 +36,15 @@ class TrainingLoopConfig:
     checkpoint_dir: Path = DEFAULT_CHECKPOINT_DIR
     first_epoch: int = 1
     progress_description: str = DEFAULT_PROGRESS_DESCRIPTION
+    checkpoint_prefix: str = ""
+    stage: str = STAGE2
 
     def __post_init__(self) -> None:
         _require_positive(self.total_epochs, "total_epochs")
         _require_positive(self.validation_interval, "validation_interval")
         _require_positive(self.first_epoch, "first_epoch")
+        if self.checkpoint_prefix and not all(c.isalnum() or c == "_" for c in self.checkpoint_prefix):
+            raise ValueError("checkpoint_prefix must be alphanumeric or underscore only")
 
 
 @dataclass(frozen=True)
@@ -62,6 +67,14 @@ class TrainingEpochReporterConfig:
     epoch_position: int
     total_epochs: int
     first_train_step: int
+    progress_description: str = ""
+
+    @property
+    def progress_label(self) -> str:
+        prefix = self.progress_description.strip()
+        if prefix:
+            return f"{prefix} epoch {self.epoch_position}/{self.total_epochs}"
+        return f"epoch {self.epoch_position}/{self.total_epochs}"
 
 
 class TrainingEpochReporter:
@@ -99,7 +112,7 @@ class TrainingEpochReporter:
             self._train_step_metric_logger(self._last_train_step, train_metrics)
 
     def _description(self) -> str:
-        return f"epoch {self._config.epoch_position}/{self._config.total_epochs}"
+        return self._config.progress_label
 
 
 def run_training_loop(
@@ -148,7 +161,12 @@ def _epoch_reporter_config(
     first_train_step: int,
 ) -> TrainingEpochReporterConfig:
     epoch_position = epoch - config.first_epoch + 1
-    return TrainingEpochReporterConfig(epoch_position, config.total_epochs, first_train_step)
+    return TrainingEpochReporterConfig(
+        epoch_position=epoch_position,
+        total_epochs=config.total_epochs,
+        first_train_step=first_train_step,
+        progress_description=config.progress_description,
+    )
 
 
 def _epoch_reporter(
@@ -316,10 +334,18 @@ def _save_epoch_checkpoints(
     best_map: float | None,
     is_best: bool,
 ) -> None:
-    payload = _checkpoint_payload(model, optimizer, epoch, metrics, best_map)
-    torch.save(payload, config.checkpoint_dir / LAST_CHECKPOINT_NAME)
+    payload = _checkpoint_payload(model, optimizer, epoch, metrics, best_map, config.stage)
+    last_name = _prefixed_name(LAST_CHECKPOINT_NAME, config.checkpoint_prefix)
+    torch.save(payload, config.checkpoint_dir / last_name)
     if is_best:
-        torch.save(payload, config.checkpoint_dir / BEST_CHECKPOINT_NAME)
+        best_name = _prefixed_name(BEST_CHECKPOINT_NAME, config.checkpoint_prefix)
+        torch.save(payload, config.checkpoint_dir / best_name)
+
+
+def _prefixed_name(base: str, prefix: str) -> str:
+    if not prefix:
+        return base
+    return f"{prefix}_{base}"
 
 
 def _checkpoint_payload(
@@ -328,8 +354,10 @@ def _checkpoint_payload(
     epoch: int,
     metrics: ReIDMetrics | None,
     best_map: float | None,
+    stage: str,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
+        "stage": stage,
         "epoch": epoch,
         "best_map": best_map,
         "metrics": _metrics_payload(metrics),

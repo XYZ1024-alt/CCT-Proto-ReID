@@ -34,9 +34,10 @@ class TrainingLossTest(unittest.TestCase):
             person_ids=torch.tensor([0, 1]),
         )
 
-        loss = stage1_alignment_loss(model, batch, Stage1LossConfig(logit_scale=10.0))
+        breakdown = stage1_alignment_loss(model, batch, Stage1LossConfig(logit_scale=10.0))
 
-        self.assertLess(float(loss.detach()), 0.01)
+        self.assertLess(float(breakdown.total.detach()), 0.01)
+        self.assertTrue(torch.allclose(breakdown.total, breakdown.clip_dual))
 
     def test_stage2_loss_breakdown_combines_clip_reid_and_tfc(self):
         model = _training_model(beta=0.0)
@@ -49,13 +50,23 @@ class TrainingLossTest(unittest.TestCase):
             person_ids=torch.tensor([0, 0, 1]),
         )
         tfc_bank = TFCCenterBank(num_train_ids=2, feature_dim=2, momentum=0.5)
-        tfc_bank.update(model.forward_training(batch.images, batch.camera_ids, batch.person_ids)["retrieval"], batch.person_ids)
-        inputs = Stage2LossInputs(classifier=classifier, tfc_bank=tfc_bank, config=Stage2LossConfig(tfc_weight=0.5))
+        tfc_bank.update(model.forward_stage2(batch.images, batch.camera_ids, batch.person_ids)["retrieval"], batch.person_ids)
+        inputs = Stage2LossInputs(
+            classifier=classifier,
+            tfc_bank=tfc_bank,
+            config=Stage2LossConfig(tfc_weight=0.5, clip_weight=1.0),
+        )
 
         breakdown = stage2_loss_breakdown(model, batch, inputs)
 
-        expected = breakdown.clip_dual + breakdown.identity + breakdown.triplet + 0.5 * breakdown.tfc
+        expected = (
+            breakdown.identity + breakdown.triplet
+            + breakdown.clip_weight * breakdown.clip_dual
+            + breakdown.tfc_weight * breakdown.tfc
+        )
         self.assertTrue(torch.allclose(breakdown.total, expected))
+        self.assertEqual(breakdown.clip_weight, 1.0)
+        self.assertEqual(breakdown.tfc_weight, 0.5)
 
 
 def _training_model(beta: float) -> T2CClipModel:

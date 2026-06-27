@@ -93,11 +93,11 @@ class TrainScriptTest(unittest.TestCase):
                 progress_factory=lambda iterable, **kwargs: iterable,
             )
             runs = _runs_for_experiment(tracking_db, "T2C-CLIP-TrainScript-Test")
-            step_history = _metric_history(tracking_db, runs[0].info.run_id, "train_step_loss")
+            step_history = _metric_history(tracking_db, runs[0].info.run_id, "stage2_train_step_loss")
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(runs[0].data.metrics["train_loss"], 1.0)
-        self.assertEqual(runs[0].data.metrics["lr"], 0.1)
+        self.assertEqual(runs[0].data.metrics["stage2_train_loss"], 1.0)
+        self.assertEqual(runs[0].data.metrics["stage2_lr"], 0.1)
         self.assertEqual([point.step for point in step_history], [1, 2])
         self.assertEqual([point.value for point in step_history], [1.1, 1.2])
         self.assertEqual(runs[0].data.metrics["mAP"], 0.1)

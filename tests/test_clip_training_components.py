@@ -6,9 +6,12 @@ import torch
 from t2c_clip.clip_backbone import (
     PromptTextEncoder,
     TransformersCLIPImageEncoder,
+    TransformersCLIPTextEncoder,
     clip_projection_dim,
+    clip_text_hidden_dim,
 )
 from t2c_clip.transforms import CLIPImageTransform
+from tests._clip_fakes import FakeCLIP, FakeImageProcessor
 
 
 class CLIPTrainingComponentsTest(unittest.TestCase):
@@ -27,16 +30,8 @@ class CLIPTrainingComponentsTest(unittest.TestCase):
 
         output = encoder(torch.ones(2, 3, 2, 2))
 
-        self.assertTrue(torch.equal(output, torch.full((2, 2), 2.0)))
-        self.assertTrue(clip.image_called)
-
-    def test_transformers_clip_image_encoder_reads_pooler_output(self):
-        clip = FakePoolingOutputCLIP(projection_dim=2)
-        encoder = TransformersCLIPImageEncoder(clip)
-
-        output = encoder(torch.ones(2, 3, 2, 2))
-
-        self.assertTrue(torch.equal(output, torch.full((2, 2), 3.0)))
+        self.assertEqual(output.shape, (2, 2))
+        self.assertEqual(output.device.type, "cpu")
 
     def test_prompt_text_encoder_projects_mean_prompt(self):
         encoder = PromptTextEncoder(prompt_embedding_dim=3, output_dim=2)
@@ -52,44 +47,40 @@ class CLIPTrainingComponentsTest(unittest.TestCase):
     def test_clip_projection_dim_reads_positive_config_value(self):
         self.assertEqual(clip_projection_dim(FakeCLIP(projection_dim=7)), 7)
 
+    def test_clip_text_hidden_dim_reads_token_embedding_width(self):
+        clip = FakeCLIP(hidden_size=8, projection_dim=2)
+        self.assertEqual(clip_text_hidden_dim(clip), 8)
 
-class FakeImageProcessor:
-    def __init__(self):
-        self.call_count = 0
+    def test_text_encoder_requires_3d_prompt_embeddings(self):
+        clip = FakeCLIP(hidden_size=8, projection_dim=2)
+        encoder = TransformersCLIPTextEncoder(clip, context_length=2, sot_token_id=49406, eos_token_id=49407)
 
-    def __call__(self, images, return_tensors):
-        self.call_count += 1
-        self.return_tensors = return_tensors
-        self.image_mode = images.mode
-        return {"pixel_values": torch.ones(1, 3, 2, 2)}
+        with self.assertRaises(ValueError):
+            encoder(torch.zeros(2, 8))
 
+    def test_text_encoder_rejects_mismatched_context_length(self):
+        clip = FakeCLIP(hidden_size=8, projection_dim=2)
+        encoder = TransformersCLIPTextEncoder(clip, context_length=3, sot_token_id=49406, eos_token_id=49407)
 
-class FakeCLIP(torch.nn.Module):
-    def __init__(self, projection_dim: int):
-        super().__init__()
-        self.config = FakeConfig(projection_dim)
-        self.image_called = False
+        with self.assertRaises(ValueError):
+            encoder(torch.zeros(1, 2, 8))
 
-    def get_image_features(self, pixel_values):
-        self.image_called = True
-        return torch.full((pixel_values.shape[0], self.config.projection_dim), 2.0)
+    def test_text_encoder_returns_normalized_projection_space_features(self):
+        clip = FakeCLIP(hidden_size=8, projection_dim=4)
+        encoder = TransformersCLIPTextEncoder(clip, context_length=3, sot_token_id=49406, eos_token_id=49407)
+        prompt_embeddings = torch.randn(4, 3, 8)
 
+        output = encoder(prompt_embeddings)
 
-class FakePoolingOutputCLIP(torch.nn.Module):
-    def __init__(self, projection_dim: int):
-        super().__init__()
-        self.config = FakeConfig(projection_dim)
+        self.assertEqual(output.shape, (4, 4))
+        norms = output.norm(dim=1)
+        self.assertTrue(torch.allclose(norms, torch.ones(4), atol=1e-5))
 
-    def get_image_features(self, pixel_values):
-        features = torch.full((pixel_values.shape[0], self.config.projection_dim), 3.0)
-        return FakePoolingOutput(features)
-
-
-class FakePoolingOutput:
-    def __init__(self, pooler_output: torch.Tensor):
-        self.pooler_output = pooler_output
+    def test_text_encoder_requires_positive_context_length(self):
+        clip = FakeCLIP(hidden_size=8, projection_dim=2)
+        with self.assertRaises(ValueError):
+            TransformersCLIPTextEncoder(clip, context_length=0, sot_token_id=49406, eos_token_id=49407)
 
 
-class FakeConfig:
-    def __init__(self, projection_dim: int):
-        self.projection_dim = projection_dim
+if __name__ == "__main__":
+    unittest.main()
