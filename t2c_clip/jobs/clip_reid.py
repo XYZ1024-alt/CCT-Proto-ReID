@@ -173,7 +173,7 @@ def build_training_job(
     loaded_clip = clip_loader(config.clip_model_name)
     transform = CLIPImageTransform(loaded_clip.image_processor)
     data = load_dataset_bundle(JobDataConfig(config.dataset, config.data_root), transform)
-    shared_model = _build_training_model(config, loaded_clip.model, data)
+    shared_model = _build_training_model(config, loaded_clip.model, data).to(config.device)
     loaders = _build_loaders(data, config)
     stage1_runtime, stage2_runtime, optimizer_stage1, optimizer_stage2 = _build_runtimes(
         config, shared_model, loaders
