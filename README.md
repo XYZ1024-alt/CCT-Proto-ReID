@@ -10,6 +10,8 @@ The current implementation follows `docs/2026-06-27-t2c-clip-design.md` for the 
 - Training-time Feature Centralization (TFC) EMA centers and loss.
 - Bidirectional image-text contrastive loss and batch-hard triplet loss.
 - Stage-1 prompt alignment loss and Stage-2 CLIP/ReID/TFC loss breakdown.
+- tqdm-based training loop scheduling with configurable mAP validation intervals.
+- `best.pth` and `last.pth` checkpoint saving.
 - MLflow tracking with a SQLite backend store.
 - No-rerank cosine ReID evaluation.
 - Injectable dual-stream model wiring for real CLIP image/text encoders.
@@ -41,6 +43,18 @@ wsl --cd /mnt/d/Code/T2C-CLIP /home/xyz10/miniconda3/bin/conda run -n reid pytho
 ```
 
 The evaluator performs standard Image-to-Image ReID scoring without rerank. Same-identity same-camera gallery samples are excluded for each query.
+
+## Training Loop Checkpoints
+
+`run_training_loop` provides reusable epoch scheduling around project-specific training and validation callables:
+
+- `TrainingLoopConfig(validation_interval=5)` validates mAP every 5 epochs by default.
+- Set `validation_interval` to another positive integer to validate at a different cadence.
+- The loop wraps epochs with `tqdm`.
+- `last.pth` is saved after every epoch.
+- `best.pth` is saved only when the latest validation mAP is better than the previous best.
+
+The loop calls real `torch.save` and lets training, validation, tqdm, and checkpoint errors surface directly.
 
 ## MLflow SQLite Tracking
 
