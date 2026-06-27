@@ -15,6 +15,7 @@ The current implementation follows `docs/2026-06-27-t2c-clip-design.md` for the 
 - MLflow tracking with a SQLite backend store.
 - No-rerank cosine ReID evaluation.
 - Injectable dual-stream model wiring for real CLIP image/text encoders.
+- Transformers CLIP-backed Market-1501/MSMT17 training job builder.
 - `.npz` no-rerank evaluation CLI.
 
 ## Environment
@@ -59,23 +60,70 @@ The loop calls real `torch.save` and lets training, validation, tqdm, and checkp
 ## Train Entrypoint
 
 `scripts/train.py` wires a project-specific training job into `run_training_loop`.
-It requires a real job builder function:
+The recommended real training builder is `t2c_clip.jobs.clip_reid:build_training_job`.
+It loads Market-1501 or MSMT17 images, wraps a Transformers CLIP image encoder, trains the T2C prompt/fusion branch, evaluates no-rerank mAP, and lets dependency, data, and checkpoint failures surface directly.
+
+Market-1501 expects the standard directories under `--data-root`:
+
+- `bounding_box_train/`
+- `query/`
+- `bounding_box_test/`
+
+MSMT17 expects the standard manifests and image folders under `--data-root`:
+
+- `list_train.txt`
+- `list_query.txt`
+- `list_gallery.txt`
+- `train/`
+- `test/`
+
+Run Stage-2 training:
 
 ```bash
-wsl --cd /mnt/d/Code/T2C-CLIP /home/xyz10/miniconda3/bin/conda run -n reid python scripts/train.py --job-builder your_package.your_module:build_training_job --epochs 120 --validation-interval 5 --checkpoint-dir checkpoints
+wsl --cd /mnt/d/Code/T2C-CLIP /home/xyz10/miniconda3/bin/conda run -n reid python scripts/train.py \
+  --job-builder t2c_clip.jobs.clip_reid:build_training_job \
+  --dataset msmt17 \
+  --data-root MSMT17_V1 \
+  --clip-model-name openai/clip-vit-base-patch16 \
+  --epochs 120 \
+  --validation-interval 5 \
+  --checkpoint-dir checkpoints \
+  --batch-size 64 \
+  --num-workers 4 \
+  --lr 0.0001 \
+  --device cuda
 ```
 
-The builder receives parsed CLI args and must return `scripts.train.TrainingJob` with:
+Useful training arguments:
 
-- `model`
-- `optimizer`
-- `train_one_epoch(epoch)`
-- `validate(epoch)` returning `ReIDMetrics`
+- `--dataset market1501|msmt17`
+- `--data-root PATH`
+- `--clip-model-name openai/clip-vit-base-patch16`
+- `--batch-size 64`
+- `--num-workers 4`
+- `--lr 0.0001`
+- `--device cuda`
+- `--beta 0.1`
+- `--context-length 4`
+- `--tfc-momentum 0.5`
+- `--triplet-margin 0.3`
+- `--tfc-weight 1.0`
 
 Add `--enable-mlflow` to initialize the SQLite-backed MLflow store before training:
 
 ```bash
-wsl --cd /mnt/d/Code/T2C-CLIP /home/xyz10/miniconda3/bin/conda run -n reid python scripts/train.py --job-builder your_package.your_module:build_training_job --epochs 120 --validation-interval 5 --checkpoint-dir checkpoints --enable-mlflow --tracking-db mlflow/t2c_clip.db --artifact-root mlruns --experiment-name T2C-CLIP --run-name train
+wsl --cd /mnt/d/Code/T2C-CLIP /home/xyz10/miniconda3/bin/conda run -n reid python scripts/train.py \
+  --job-builder t2c_clip.jobs.clip_reid:build_training_job \
+  --dataset msmt17 \
+  --data-root MSMT17_V1 \
+  --epochs 120 \
+  --validation-interval 5 \
+  --checkpoint-dir checkpoints \
+  --enable-mlflow \
+  --tracking-db mlflow/t2c_clip.db \
+  --artifact-root mlruns \
+  --experiment-name T2C-CLIP \
+  --run-name msmt17-stage2
 ```
 
 ## MLflow SQLite Tracking
@@ -96,4 +144,4 @@ The SQLite database and artifact directory are local runtime outputs and are ign
 
 ## CLIP Encoder Boundary
 
-`T2CClipModel` requires real image and text encoder modules to be injected. It does not download weights, invent mock metrics, or return fake training success. A Stage-1 or Stage-2 trainer should pass concrete CLIP-compatible encoders into this model and let dependency or checkpoint failures surface directly.
+`T2CClipModel` requires concrete encoder modules to be injected. The recommended `clip_reid` builder uses a real Transformers CLIP image encoder and a learnable prompt projection module for the text branch. It does not invent mock metrics, return fake training success, silently switch devices, or hide missing dependency and dataset errors.

@@ -9,6 +9,8 @@ import torch
 from scripts.train import TrainingJob, main
 from t2c_clip.evaluation import ReIDMetrics
 
+RECORDED_ARGS = None
+
 
 class TrainScriptTest(unittest.TestCase):
     def test_main_requires_job_builder(self):
@@ -42,6 +44,25 @@ class TrainScriptTest(unittest.TestCase):
         self.assertEqual(last_payload["epoch"], 2)
         self.assertEqual(last_payload["metrics"]["mAP"], 0.2)
 
+    def test_main_passes_project_training_args_to_builder(self):
+        global RECORDED_ARGS
+        RECORDED_ARGS = None
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_dir = Path(tmp) / "checkpoints"
+            exit_code = main(
+                _recording_job_args(checkpoint_dir),
+                progress_factory=lambda iterable, **kwargs: iterable,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(RECORDED_ARGS.dataset, "msmt17")
+        self.assertEqual(RECORDED_ARGS.data_root, Path("MSMT17_V1"))
+        self.assertEqual(RECORDED_ARGS.clip_model_name, "openai/clip-vit-base-patch16")
+        self.assertEqual(RECORDED_ARGS.batch_size, 8)
+        self.assertEqual(RECORDED_ARGS.num_workers, 2)
+        self.assertEqual(RECORDED_ARGS.lr, 0.001)
+        self.assertEqual(RECORDED_ARGS.device, "cpu")
+
 
 def build_training_job(args) -> TrainingJob:
     model = torch.nn.Linear(2, 2)
@@ -57,3 +78,36 @@ def build_training_job(args) -> TrainingJob:
         return ReIDMetrics(map=epoch / 10.0, cmc={1: epoch / 10.0})
 
     return TrainingJob(model, optimizer, train_one_epoch, validate)
+
+
+def recording_training_job(args) -> TrainingJob:
+    global RECORDED_ARGS
+    RECORDED_ARGS = args
+    return build_training_job(args)
+
+
+def _recording_job_args(checkpoint_dir: Path) -> list[str]:
+    return [
+        "--job-builder",
+        f"{__name__}:recording_training_job",
+        "--epochs",
+        "1",
+        "--validation-interval",
+        "1",
+        "--checkpoint-dir",
+        str(checkpoint_dir),
+        "--dataset",
+        "msmt17",
+        "--data-root",
+        "MSMT17_V1",
+        "--clip-model-name",
+        "openai/clip-vit-base-patch16",
+        "--batch-size",
+        "8",
+        "--num-workers",
+        "2",
+        "--lr",
+        "0.001",
+        "--device",
+        "cpu",
+    ]

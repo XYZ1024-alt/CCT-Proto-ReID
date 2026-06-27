@@ -22,6 +22,17 @@ DEFAULT_TRACKING_DB = Path("mlflow") / "t2c_clip.db"
 DEFAULT_ARTIFACT_ROOT = Path("mlruns")
 DEFAULT_EXPERIMENT_NAME = "T2C-CLIP"
 DEFAULT_RUN_NAME = "train"
+DEFAULT_CLIP_MODEL_NAME = "openai/clip-vit-base-patch16"
+DEFAULT_BATCH_SIZE = 64
+DEFAULT_NUM_WORKERS = 4
+DEFAULT_LEARNING_RATE = 1e-4
+DEFAULT_DEVICE = "cuda"
+DEFAULT_BETA = 0.1
+DEFAULT_CONTEXT_LENGTH = 4
+DEFAULT_TFC_MOMENTUM = 0.5
+DEFAULT_TRIPLET_MARGIN = 0.3
+DEFAULT_TFC_WEIGHT = 1.0
+SUPPORTED_DATASETS = ("market1501", "msmt17")
 
 TrainOneEpoch = Callable[[int], None]
 ValidateEpoch = Callable[[int], ReIDMetrics]
@@ -61,7 +72,23 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact-root", type=Path, default=DEFAULT_ARTIFACT_ROOT)
     parser.add_argument("--experiment-name", default=DEFAULT_EXPERIMENT_NAME)
     parser.add_argument("--run-name", default=DEFAULT_RUN_NAME)
+    _add_project_training_args(parser)
     return parser
+
+
+def _add_project_training_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--dataset", choices=SUPPORTED_DATASETS)
+    parser.add_argument("--data-root", type=Path)
+    parser.add_argument("--clip-model-name", default=DEFAULT_CLIP_MODEL_NAME)
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--num-workers", type=int, default=DEFAULT_NUM_WORKERS)
+    parser.add_argument("--lr", type=float, default=DEFAULT_LEARNING_RATE)
+    parser.add_argument("--device", default=DEFAULT_DEVICE)
+    parser.add_argument("--beta", type=float, default=DEFAULT_BETA)
+    parser.add_argument("--context-length", type=int, default=DEFAULT_CONTEXT_LENGTH)
+    parser.add_argument("--tfc-momentum", type=float, default=DEFAULT_TFC_MOMENTUM)
+    parser.add_argument("--triplet-margin", type=float, default=DEFAULT_TRIPLET_MARGIN)
+    parser.add_argument("--tfc-weight", type=float, default=DEFAULT_TFC_WEIGHT)
 
 
 def _initialize_mlflow_if_requested(args: argparse.Namespace) -> None:
