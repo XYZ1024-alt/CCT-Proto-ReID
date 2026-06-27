@@ -107,6 +107,27 @@ class TrainingLoopTest(unittest.TestCase):
         self.assertEqual(progress.postfixes, [{"mAP": "0.2500", "best_mAP": "0.2500", "rank1": "0.5000"}])
         self.assertEqual(progress.messages, ["epoch=1 mAP=0.2500 rank1=0.5000 best_mAP=0.2500 best=True"])
 
+    def test_each_epoch_is_reported_even_without_validation_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            progress = TqdmLikeProgressRecorder()
+            run_training_loop(
+                model=torch.nn.Linear(2, 2),
+                optimizer=None,
+                config=TrainingLoopConfig(total_epochs=3, validation_interval=2, checkpoint_dir=Path(tmp)),
+                train_one_epoch=lambda epoch: None,
+                validate=lambda epoch: ReIDMetrics(map=0.25, cmc={1: 0.5}),
+                progress_factory=progress,
+            )
+
+        self.assertEqual(
+            progress.messages,
+            [
+                "epoch=1 done",
+                "epoch=2 mAP=0.2500 rank1=0.5000 best_mAP=0.2500 best=True",
+                "epoch=3 done",
+            ],
+        )
+
     def test_validation_metrics_are_sent_to_metric_logger(self):
         logged: list[tuple[int, ReIDMetrics, float | None, bool]] = []
         with tempfile.TemporaryDirectory() as tmp:

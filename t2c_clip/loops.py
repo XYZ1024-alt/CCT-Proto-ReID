@@ -103,6 +103,7 @@ def _report_metrics(
     metric_logger: MetricLogger | None,
 ) -> None:
     if metrics is None:
+        _write_progress_message(progress, f"epoch={epoch} done")
         return
     _write_progress_metrics(progress, epoch, metrics, best_map, is_best)
     if metric_logger is not None:
@@ -118,11 +119,15 @@ def _write_progress_metrics(
 ) -> None:
     values = _metric_strings(metrics, best_map)
     set_postfix = getattr(progress, "set_postfix", None)
-    write = getattr(progress, "write", None)
     if callable(set_postfix):
         set_postfix(values)
+    _write_progress_message(progress, f"epoch={epoch} {_metric_message(values)} best={is_best}")
+
+
+def _write_progress_message(progress: Iterable[int], message: str) -> None:
+    write = getattr(progress, "write", None)
     if callable(write):
-        write(f"epoch={epoch} {_metric_message(values)} best={is_best}")
+        write(message)
 
 
 def _metric_strings(metrics: ReIDMetrics, best_map: float | None) -> dict[str, str]:
